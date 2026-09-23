@@ -1,6 +1,7 @@
 import type { World } from '../game/world'
 import { Champion } from '../game/champion'
 import { Minion, Monster, Ward } from '../game/npc'
+import { DEV } from '../ui/device'
 
 export class Minimap {
   readonly el: HTMLDivElement
@@ -15,6 +16,12 @@ export class Minimap {
   pings: { x: number; z: number; t0: number; color: string }[] = []
   onLeft: ((x: number, z: number) => void) | null = null
   onRight: ((x: number, z: number) => void) | null = null
+  /** look/drag ended (pointer released) */
+  onLeftEnd: (() => void) | null = null
+  /** long-press (touch) */
+  onPing: ((x: number, z: number) => void) | null = null
+  private pingTimer = 0
+  private active: number | null = null
 
   constructor(parent: HTMLElement, private w: World) {
     this.el = document.createElement('div')
@@ -31,21 +38,67 @@ export class Minimap {
     this.fogImg = this.fog.getContext('2d')!.createImageData(S, S)
     this.renderBg()
     this.resize(220)
-    let dragging = false
+    // mouse: left = look (drag), right = move — mouse events, so chorded presses and the game's cursor tracking work as before.
+    // touch (and ?mouseTouch=1): pointer events, hold = look, long-press = ping.
     const toWorld = (e: MouseEvent): [number, number] => {
       const r = this.canvas.getBoundingClientRect()
-      return [((e.clientX - r.left) / r.width) * S, ((e.clientY - r.top) / r.height) * S]
+      const x = ((e.clientX - r.left) / r.width) * S, z = ((e.clientY - r.top) / r.height) * S
+      return [Math.max(0, Math.min(S, x)), Math.max(0, Math.min(S, z))]
     }
+    let mdrag = false
     this.canvas.addEventListener('mousedown', e => {
+      if (DEV.mouseTouch) return
       e.preventDefault()
       e.stopPropagation()
       const [x, z] = toWorld(e)
-      if (e.button === 0) { dragging = true; this.onLeft?.(x, z) }
+      if (e.button === 0) { mdrag = true; this.onLeft?.(x, z) }
       else if (e.button === 2) this.onRight?.(x, z)
     })
-    window.addEventListener('mousemove', e => { if (dragging) { const [x, z] = toWorld(e); this.onLeft?.(Math.max(0, Math.min(S, x)), Math.max(0, Math.min(S, z))) } })
-    window.addEventListener('mouseup', () => { dragging = false })
+    const onWinMove = (e: MouseEvent) => { if (mdrag) { const [x, z] = toWorld(e); this.onLeft?.(x, z) } }
+    const onWinUp = () => { if (mdrag) { mdrag = false; this.onLeftEnd?.() } }
+    window.addEventListener('mousemove', onWinMove)
+    window.addEventListener('mouseup', onWinUp)
+    this.off = () => { window.removeEventListener('mousemove', onWinMove); window.removeEventListener('mouseup', onWinUp) }
+
+    let sx = 0, sy = 0
+    const clearPing = () => { if (this.pingTimer) { clearTimeout(this.pingTimer); this.pingTimer = 0 } }
+    const touchLike = (e: PointerEvent) => e.pointerType !== 'mouse' || DEV.mouseTouch
+    this.canvas.addEventListener('pointerdown', e => {
+      if (!touchLike(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (this.active !== null) return
+      const [x, z] = toWorld(e)
+      this.active = e.pointerId
+      try { this.canvas.setPointerCapture(e.pointerId) } catch { /* synthetic pointer */ }
+      sx = e.clientX; sy = e.clientY
+      this.onLeft?.(x, z)
+      clearPing()
+      if (this.onPing) this.pingTimer = window.setTimeout(() => { this.pingTimer = 0; this.onPing?.(x, z) }, 450)
+    })
+    this.canvas.addEventListener('pointermove', e => {
+      if (this.active !== e.pointerId) return
+      if (Math.hypot(e.clientX - sx, e.clientY - sy) > 8) clearPing()
+      const [x, z] = toWorld(e)
+      this.onLeft?.(x, z)
+    })
+    const end = (e: PointerEvent) => {
+      if (this.active !== e.pointerId) return
+      this.active = null
+      clearPing()
+      this.onLeftEnd?.()
+    }
+    this.canvas.addEventListener('pointerup', end)
+    this.canvas.addEventListener('pointercancel', end)
+    this.canvas.addEventListener('lostpointercapture', end)
     this.canvas.addEventListener('contextmenu', e => e.preventDefault())
+  }
+
+  private off: () => void = () => {}
+  destroy() {
+    this.off()
+    if (this.pingTimer) clearTimeout(this.pingTimer)
+    this.pingTimer = 0
   }
 
   resize(px: number) {

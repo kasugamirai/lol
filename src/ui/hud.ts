@@ -8,6 +8,8 @@ import { xpToNext } from '../game/data/units'
 import { el, esc, fmtTime, champColor } from './dom'
 import { settings, saveSettings } from '../settings'
 import { sfx } from '../audio'
+import { TC_LAYOUT } from './touchlogic'
+import { canFullscreen, requestFullscreen } from './device'
 
 export interface HudActions {
   levelSkill(i: number): void
@@ -19,6 +21,8 @@ export interface HudActions {
   quit(): void
   surrender?(): void
   applySettings(): void
+  /** touch settings changed in the game menu (scale / zoom / joystick) */
+  applyTouch?(): void
 }
 
 const SKEYS: CastKey[] = ['Q', 'W', 'E', 'R']
@@ -42,8 +46,20 @@ export class Hud {
   private tipFn: (() => string) | null = null
   private chatOpen = false
   fps = 0
+  /** touch layout active (frozen for the match) */
+  readonly touch: boolean
+  /** container of the touch controls (created by setTouchLayout) */
+  tcLayer: HTMLElement | null = null
+  /** a blocking panel (shop / scoreboard / menu / chat) opened or closed */
+  onPanel: ((open: boolean) => void) | null = null
+  /** pointerType of the last pointerdown inside the HUD */
+  lastPtr = 'mouse'
+  private chatAll = false
+  private lpTimer = 0
+  private tipHideTimer = 0
 
-  constructor(container: HTMLElement, private w: World, private act: HudActions, private info: { hostLabel: () => string; ping: () => string }) {
+  constructor(container: HTMLElement, private w: World, private act: HudActions, private info: { hostLabel: () => string; ping: () => string }, opts: { touch?: boolean } = {}) {
+    this.touch = !!opts.touch
     this.root = el('div', 'hud')
     this.root.innerHTML = this.template()
     container.appendChild(this.root)
@@ -74,6 +90,7 @@ export class Hud {
         <div class="team-score r"><span class="tk-r">0</span><small class="tw-r">🏰0</small></div>
       </div>
       <div class="hud-tr"><span class="kda">0/0/0</span><span class="cs">🗡 0</span><span class="fps"></span><span class="net"></span></div>
+      ${this.touch ? '<div class="tc-tr"><button data-act="score" aria-label="数据">📊</button><button data-act="chatbtn" aria-label="聊天">💬</button><button data-act="menu" aria-label="菜单">⚙️</button></div>' : ''}
       <div class="killfeed"></div>
       <div class="announce"><div class="a-text"></div><div class="a-sub"></div></div>
       <div class="deathov hidden"><div class="d1">你已阵亡</div><div class="d2"></div></div>
@@ -106,10 +123,11 @@ export class Hud {
           <div class="inv-row">
             <button class="gold-btn" data-act="shop" title="商店 (P)">💰 <b class="gold">0</b></button>
             <button class="recall-btn" data-act="recall" title="回城 (B)">🏠</button>
+            ${this.touch ? '<button class="tc-qbuy hidden" data-act="qbuy" aria-label="一键购买"><span class="qb-icon">🛒</span><b class="qb-cost"></b></button>' : ''}
           </div>
         </div>
       </div>` : `<div class="spec-banner">观战模式</div>`}
-      <div class="chat"><div class="log"></div><input class="chat-in hidden" maxlength="120" placeholder="Enter 发送（Shift+Enter 发送给全部）"></div>
+      <div class="chat"><div class="log"></div><input class="chat-in hidden" maxlength="120" enterkeyhint="send" autocomplete="off" autocapitalize="off" placeholder="${this.touch ? '发送消息…' : 'Enter 发送（Shift+Enter 发送给全部）'}">${this.touch ? '<div class="chat-btns hidden"><button data-act="chatall">队伍</button><button data-act="chatsend">发送</button></div>' : ''}</div>
       <div class="tooltip hidden"></div>
       <div class="scoreboard hidden"></div>
       <div class="shop hidden">
@@ -121,18 +139,35 @@ export class Hud {
         <div class="gm-box">
           <h3>游戏菜单</h3>
           <label>音量 <input type="range" min="0" max="1" step="0.05" class="gm-vol"></label>
-          <label>施法方式 <select class="gm-cast"><option value="quick">快速施法（按键即释放）</option><option value="indicator">指示器施法（松开释放）</option></select></label>
-          <label><input type="checkbox" class="gm-edge"> 屏幕边缘移动镜头</label>
+          <label class="kbd-only">施法方式 <select class="gm-cast"><option value="quick">快速施法（按键即释放）</option><option value="indicator">指示器施法（松开释放）</option></select></label>
+          <label class="kbd-only"><input type="checkbox" class="gm-edge"> 屏幕边缘移动镜头</label>
           <label><input type="checkbox" class="gm-fps"> 显示 FPS</label>
           <label><input type="checkbox" class="gm-shadow"> 阴影（重新进入生效）</label>
-          <div class="gm-keys">右键 移动/攻击 · A+左键 攻击移动 · S 停止 · QWER 技能 · Ctrl+QWER 升级 · D/F 召唤师技能 · 1-7 物品 · 4 守卫 · B 回城 · P 商店 · Tab 数据 · 空格 镜头居中 · Y 锁定镜头 · G 标记信号 · Enter 聊天</div>
+          ${this.touch ? this.touchMenuHtml() : ''}
+          <div class="gm-keys kbd-only">右键 移动/攻击 · A+左键 攻击移动 · S 停止 · QWER 技能 · Ctrl+QWER 升级 · D/F 召唤师技能 · 1-7 物品 · 4 守卫 · B 回城 · P 商店 · Tab 数据 · 空格 镜头居中 · Y 锁定镜头 · G 标记信号 · Enter 聊天</div>
           <div class="gm-btns"><button data-act="resume">继续游戏</button><button class="danger" data-act="quit">退出对局</button></div>
         </div>
       </div>`
   }
 
+  private touchMenuHtml() {
+    const me = this.w.me
+    const skills = me ? [0, 1, 2, 3].map(i => `<div class="gm-skill">${this.tipHtml('skill:' + i)}</div>`).join('') + [0, 1].map(i => `<div class="gm-skill">${this.tipHtml('spell:' + i)}</div>`).join('') : ''
+    return `<div class="gm-touch">
+      <label>摇杆 <select class="gm-joy"><option value="dynamic">动态（跟随拇指）</option><option value="fixed">固定位置</option></select></label>
+      <label>攻击优先 <select class="gm-atk"><option value="lowhp">血量最低的英雄</option><option value="near">距离最近的英雄</option></select></label>
+      <label><input type="checkbox" class="gm-aimcam"> 远程技能瞄准时镜头前移</label>
+      <label>界面缩放 <input type="range" min="0.8" max="1.3" step="0.05" class="gm-uis"></label>
+      <label>镜头距离 <input type="range" min="0.7" max="1" step="0.02" class="gm-zoom"></label>
+      ${canFullscreen() ? '<button class="btn" data-act="fullscreen">⛶ 全屏</button>' : ''}
+      <div class="muted small">操作模式可在主菜单「设置」中切换（下局生效）</div>
+      ${skills ? `<details class="gm-skills"><summary>技能说明</summary>${skills}</details>` : ''}
+    </div>`
+  }
+
   private bind() {
     const r = this.root
+    r.addEventListener('pointerdown', e => { this.lastPtr = e.pointerType || 'mouse' }, { capture: true })
     r.addEventListener('mousedown', e => {
       const t = e.target as HTMLElement
       if (t.closest('.hud-bottom, .shop, .scoreboard, .gmenu, .chat')) e.stopPropagation()
@@ -143,11 +178,33 @@ export class Hud {
       const lv = t.closest('.lvlup') as HTMLElement | null
       if (lv) { this.act.levelSkill(Number(lv.dataset.lv)); sfx.play('click'); return }
       const slot = t.closest('.slot, .islot') as HTMLElement | null
-      if (slot && !t.closest('.shop')) { this.act.cast(slot.dataset.key as CastKey); return }
+      if (slot && !t.closest('.shop')) { if (!this.touch) this.act.cast(slot.dataset.key as CastKey); return }
+      if (this.touch && t.closest('.scoreboard')) { this.showScoreboard(false); return }
       const a = t.closest('[data-act]') as HTMLElement | null
       if (a) {
         const act = a.dataset.act
+        if (act === 'sell' && this.lastPtr !== 'mouse' && !a.dataset.armed) {
+          // touch: two-step sell to avoid accidental taps
+          a.dataset.armed = '1'
+          const label = a.textContent
+          a.textContent = '确认出售'
+          a.classList.add('armed')
+          setTimeout(() => { if (a.isConnected) { delete a.dataset.armed; a.textContent = label; a.classList.remove('armed') } }, 2500)
+          return
+        }
         if (act === 'shop') this.toggleShop()
+        else if (act === 'score') this.showScoreboard(this.q('.scoreboard').classList.contains('hidden'))
+        else if (act === 'chatbtn') this.openChat()
+        else if (act === 'menu') this.toggleMenu(true)
+        else if (act === 'qbuy') {
+          if (a.dataset.id) {
+            this.act.buy(a.dataset.id)
+            // refresh now: a second fast tap must not re-buy the same (possibly non-unique) item
+            if (this.w.me) this.updateQuickBuy(this.w.me)
+            if (this.shopOpen) this.renderShop()
+          }
+        }
+        else if (act === 'fullscreen') requestFullscreen()
         else if (act === 'recall') this.act.recall()
         else if (act === 'resume') this.toggleMenu(false)
         else if (act === 'quit') this.act.quit()
@@ -160,45 +217,102 @@ export class Hud {
       if (tab) { this.shopTab = tab.dataset.tab!; this.renderShop() }
     })
     r.addEventListener('dblclick', e => {
+      if (this.lastPtr !== 'mouse') return
       const card = (e.target as HTMLElement).closest('.shop-item') as HTMLElement | null
       if (card) { this.act.buy(card.dataset.id!); this.renderShop() }
     })
     r.addEventListener('contextmenu', e => {
+      // Android long-press fires contextmenu: only mice may buy/sell with it
+      if (this.lastPtr !== 'mouse') return
       const t = e.target as HTMLElement
       const card = t.closest('.shop-item') as HTMLElement | null
       if (card) { this.act.buy(card.dataset.id!); this.renderShop(); return }
       const is = t.closest('.islot') as HTMLElement | null
       if (is && is.dataset.slot && !this.q('.shop').classList.contains('hidden')) { this.act.sell(Number(is.dataset.slot)); this.renderShop() }
     })
-    // tooltips
-    r.addEventListener('mouseover', e => {
+    // tooltips: hover for mice; long-press on non-castable elements for touch
+    r.addEventListener('pointerover', e => {
+      if (e.pointerType !== 'mouse') return
       const t = (e.target as HTMLElement).closest('[data-tip]') as HTMLElement | null
       if (!t) { this.hideTip(); return }
-      const tip = t.dataset.tip!
-      this.tipFn = () => this.tipHtml(tip)
-      const tt = this.q('.tooltip')
-      tt.innerHTML = this.tipFn()
-      tt.classList.remove('hidden')
-      const b = t.getBoundingClientRect()
-      const tb = tt.getBoundingClientRect()
-      tt.style.left = Math.max(8, Math.min(window.innerWidth - tb.width - 8, b.left + b.width / 2 - tb.width / 2)) + 'px'
-      tt.style.top = Math.max(8, b.top - tb.height - 10) + 'px'
+      this.showTip(t.dataset.tip!, t.getBoundingClientRect())
     })
-    r.addEventListener('mouseout', e => {
+    r.addEventListener('pointerout', e => {
+      if (e.pointerType !== 'mouse') return
       const t = (e.relatedTarget as HTMLElement | null)?.closest?.('[data-tip]')
       if (!t) this.hideTip()
+    })
+    let lpX = 0, lpY = 0
+    r.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse') return
+      const t = (e.target as HTMLElement).closest('[data-tip]:not(.slot):not(.islot)') as HTMLElement | null
+      clearTimeout(this.lpTimer)
+      if (!t) return
+      const tip = t.dataset.tip!, rect = t.getBoundingClientRect()
+      lpX = e.clientX; lpY = e.clientY
+      this.lpTimer = window.setTimeout(() => this.showTip(tip, rect), 500)
+    })
+    r.addEventListener('pointermove', e => {
+      if (e.pointerType !== 'mouse' && Math.hypot(e.clientX - lpX, e.clientY - lpY) > 10) clearTimeout(this.lpTimer)
+    })
+    const lpEnd = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse') return
+      clearTimeout(this.lpTimer)
+      if (this.tipFn) { clearTimeout(this.tipHideTimer); this.tipHideTimer = window.setTimeout(() => this.hideTip(), 1200) }
+    }
+    r.addEventListener('pointerup', lpEnd)
+    r.addEventListener('pointercancel', lpEnd)
+    // touch chat buttons act on pointerdown so the input keeps focus
+    r.addEventListener('pointerdown', e => {
+      const b = (e.target as HTMLElement).closest('[data-act="chatall"], [data-act="chatsend"]') as HTMLElement | null
+      if (!b) return
+      e.preventDefault()
+      if (b.dataset.act === 'chatall') {
+        this.chatAll = !this.chatAll
+        b.textContent = this.chatAll ? '全部' : '队伍'
+        b.classList.toggle('on', this.chatAll)
+      } else {
+        const inp = this.q<HTMLInputElement>('.chat-in')
+        const v = inp.value.trim()
+        if (v) this.act.chat(v, this.chatAll)
+        inp.value = ''
+        this.closeChat()
+      }
     })
     // chat
     const input = this.q<HTMLInputElement>('.chat-in')
     input.addEventListener('keydown', e => {
       e.stopPropagation()
+      if (e.isComposing || e.keyCode === 229) return
       if (e.key === 'Enter') {
         const v = input.value.trim()
-        if (v) this.act.chat(v, e.shiftKey)
+        if (v) this.act.chat(v, e.shiftKey || this.chatAll)
         input.value = ''
         this.closeChat()
       } else if (e.key === 'Escape') this.closeChat()
     })
+    if (this.touch) {
+      input.addEventListener('blur', e => {
+        const to = e.relatedTarget as HTMLElement | null
+        if (to && to.closest('.chat')) return
+        setTimeout(() => { if (this.chatOpen && document.activeElement !== input) this.closeChat() }, 50)
+        window.scrollTo(0, 0)
+      })
+      const joy = this.q<HTMLSelectElement>('.gm-joy'), atk = this.q<HTMLSelectElement>('.gm-atk')
+      const aimcam = this.q<HTMLInputElement>('.gm-aimcam'), uis = this.q<HTMLInputElement>('.gm-uis'), zoom = this.q<HTMLInputElement>('.gm-zoom')
+      joy.value = settings.joyMode; atk.value = settings.atkPri; aimcam.checked = settings.aimCam
+      uis.value = String(settings.uiScale); zoom.value = String(settings.touchZoom)
+      const apply = () => {
+        settings.joyMode = joy.value as any
+        settings.atkPri = atk.value as any
+        settings.aimCam = aimcam.checked
+        settings.uiScale = Number(uis.value)
+        settings.touchZoom = Number(zoom.value)
+        saveSettings()
+        this.act.applyTouch?.()
+      }
+      for (const x of [joy, atk, aimcam, uis, zoom]) x.addEventListener('input', apply)
+    }
     // menu settings
     const vol = this.q<HTMLInputElement>('.gm-vol')
     vol.value = String(settings.volume)
@@ -217,9 +331,28 @@ export class Hud {
     sh.addEventListener('change', () => { settings.shadows = sh.checked; saveSettings(); this.act.applySettings() })
   }
 
+  private showTip(tip: string, b: DOMRect) {
+    clearTimeout(this.tipHideTimer)
+    this.tipFn = () => this.tipHtml(tip)
+    const tt = this.q('.tooltip')
+    tt.innerHTML = this.tipFn()
+    tt.classList.remove('hidden')
+    const tb = tt.getBoundingClientRect()
+    let top = b.top - tb.height - 10
+    if (top < 8) top = Math.min(innerHeight - tb.height - 8, b.bottom + 10)
+    tt.style.left = Math.max(8, Math.min(window.innerWidth - tb.width - 8, b.left + b.width / 2 - tb.width / 2)) + 'px'
+    tt.style.top = Math.max(8, top) + 'px'
+  }
+
   private hideTip() {
     this.tipFn = null
     this.q('.tooltip').classList.add('hidden')
+  }
+
+  private panelChanged() {
+    const open = this.chatOpen || this.shopOpen || this.menuOpen || !this.q('.scoreboard').classList.contains('hidden')
+    this.root.classList.toggle('panel-open', open)
+    this.onPanel?.(open)
   }
 
   get chatting() { return this.chatOpen }
@@ -227,15 +360,19 @@ export class Hud {
     this.chatOpen = true
     const i = this.q<HTMLInputElement>('.chat-in')
     i.classList.remove('hidden')
+    this.root.querySelector('.chat-btns')?.classList.remove('hidden')
     i.focus()
     this.root.querySelector('.chat')!.classList.add('open')
+    this.panelChanged()
   }
   closeChat() {
     this.chatOpen = false
     const i = this.q<HTMLInputElement>('.chat-in')
     i.blur()
     i.classList.add('hidden')
+    this.root.querySelector('.chat-btns')?.classList.add('hidden')
     this.root.querySelector('.chat')!.classList.remove('open')
+    this.panelChanged()
   }
 
   get shopOpen() { return !this.q('.shop').classList.contains('hidden') }
@@ -245,11 +382,14 @@ export class Hud {
     s.classList.toggle('hidden', !show)
     if (show) this.renderShop()
     sfx.play('click')
+    this.panelChanged()
   }
   get menuOpen() { return !this.q('.gmenu').classList.contains('hidden') }
+  get scoreboardOpen() { return !this.q('.scoreboard').classList.contains('hidden') }
   toggleMenu(v?: boolean) {
     const s = this.q('.gmenu')
     s.classList.toggle('hidden', !(v ?? s.classList.contains('hidden')))
+    this.panelChanged()
   }
   closePanels() {
     if (this.chatOpen) { this.closeChat(); return true }
@@ -260,6 +400,7 @@ export class Hud {
     const s = this.q('.scoreboard')
     s.classList.toggle('hidden', !v)
     if (v) this.renderScoreboard()
+    this.panelChanged()
   }
 
   // ------------------------------------------------------------------ feeds
@@ -327,6 +468,7 @@ export class Hud {
     this.q('.net').textContent = `${this.info.hostLabel()} ${this.info.ping()}`
     if (!this.q('.scoreboard').classList.contains('hidden')) this.renderScoreboard()
     if (this.tipFn) this.q('.tooltip').innerHTML = this.tipFn()
+    if (this.touch && me) this.updateQuickBuy(me)
     if (this.shopOpen && me) {
       this.q('.shop-hint').textContent = me.canShop() ? `金币 ${Math.floor(me.gold)}` : '离开泉水后无法购买（阵亡时可购买）'
       this.q('.shop').classList.toggle('noshop', !me.canShop())
@@ -380,6 +522,7 @@ export class Hud {
       const want = id ? ITEM_MAP[id]?.icon ?? '?' : ''
       if (icon.textContent !== want) icon.textContent = want
       s.classList.toggle('empty', !id)
+      s.classList.toggle('noact', !id || !ITEM_MAP[id]?.active)
       const cd = me.cds[key] ?? 0
       const ov = s.querySelector('.cdov') as HTMLElement
       if (cd > 0 && id && ITEM_MAP[id]?.active) {
@@ -437,7 +580,7 @@ export class Hud {
       const ic = BUFF_ICON[b.kind]
       if (!ic) continue
       const rem = b.until - now
-      icons.push(`<span class="buff ${BAD.has(b.kind) ? 'bad' : ''}" title="${BUFF_NAME[b.kind] ?? b.kind}">${ic}${b.kind === 'dragon' ? `<i>${b.value}</i>` : rem < 60 ? `<i>${Math.ceil(rem)}</i>` : ''}</span>`)
+      icons.push(`<span class="buff ${BAD.has(b.kind) ? 'bad' : ''}" ${this.touch ? `data-tip="buff:${b.kind}"` : `title="${BUFF_NAME[b.kind] ?? b.kind}"`}>${ic}${b.kind === 'dragon' ? `<i>${b.value}</i>` : rem < 60 ? `<i>${Math.ceil(rem)}</i>` : ''}</span>`)
     }
     const html = icons.join('')
     if (bb.innerHTML !== html) bb.innerHTML = html
@@ -472,6 +615,7 @@ export class Hud {
       const need = xpToNext(me.level)
       return `<div class="tt-h">${esc(me.def.name)} · ${esc(me.def.title)}</div><div class="tt-m">${me.def.role} · 等级 ${me.level} · 经验 ${Math.floor(me.xp)}/${need}</div><div class="tt-d">${esc(me.def.lore)}</div>`
     }
+    if (kind === 'buff') return `<div class="tt-h">${BUFF_ICON[arg] ?? ''} ${esc(BUFF_NAME[arg] ?? arg)}</div>`
     if (kind === 'stat') {
       const names: Record<string, string> = { ad: '攻击力', ap: '法术强度', armor: '护甲', mr: '魔法抗性', as: '攻击速度', haste: '技能急速', crit: '暴击几率', ms: '移动速度' }
       return `<div class="tt-h">${names[arg] ?? arg}</div>`
@@ -493,12 +637,13 @@ export class Hud {
       <div class="shop-item ${me.hasItem(it.id) && !it.consumable ? 'owned' : ''} ${this.shopSel === it.id ? 'sel' : ''}" data-act="sel" data-id="${it.id}">
         <div class="si-icon">${it.icon}</div><div class="si-name">${esc(it.name)}</div>
         <div class="si-price" data-price="${cost}">${cost < it.price ? `<s>${it.price}</s> ` : ''}${cost}</div>
+        ${this.touch && this.shopSel === it.id ? `<button class="si-buy" data-act="buy" data-id="${it.id}">购买</button>` : ''}
       </div>`
     }).join('')
     const sel = this.shopSel ? ITEM_MAP[this.shopSel] : null
     const inv = me.items.map((id, i) => id ? `<div class="inv-it"><span>${ITEM_MAP[id].icon} ${esc(ITEM_MAP[id].name)}</span><button data-act="sell" data-slot="${i}">出售 ${Math.floor(ITEM_MAP[id].price * SELL_RATIO)}</button></div>` : '').join('')
-    this.q('.shop-detail').innerHTML = (sel ? `${itemTip(sel, me)}<button class="buy-btn" data-act="buy" data-id="${sel.id}">购买 · ${me.itemCost(sel.id).cost} 金币</button>` : '<div class="tt-d">选择一件装备查看详情<br>右键或双击装备可直接购买</div>') +
-      `<div class="inv-list"><div class="tt-m">我的装备（右键装备栏可出售）</div>${inv || '<div class="tt-d">暂无</div>'}</div>`
+    this.q('.shop-detail').innerHTML = (sel ? `${itemTip(sel, me)}<button class="buy-btn" data-act="buy" data-id="${sel.id}">购买 · ${me.itemCost(sel.id).cost} 金币</button>` : (this.touch ? '<div class="tt-d">点击装备查看详情，点「购买」购买</div>' : '<div class="tt-d">选择一件装备查看详情<br>右键或双击装备可直接购买</div>')) +
+      `<div class="inv-list"><div class="tt-m">${this.touch ? '我的装备（点「出售」出售）' : '我的装备（右键装备栏可出售）'}</div>${inv || '<div class="tt-d">暂无</div>'}</div>`
     this.markAffordable(me)
   }
   private markAffordable(me: Champion) {
@@ -523,7 +668,78 @@ export class Hud {
       <table><tr><th></th><th>玩家</th><th>K/D/A</th><th>补刀</th><th>装备</th><th>金币</th></tr>${teams[t].map(row).join('')}</table></div>`).join('')
   }
 
+  /** rearrange the existing HUD nodes into the touch layout (nodes are moved, never recreated) */
+  setTouchLayout() {
+    const r = this.root
+    const tc = el('div', 'tc')
+    r.appendChild(tc)
+    this.tcLayer = tc
+    const L = TC_LAYOUT as any
+    const place = (node: HTMLElement | null, spec: [number, number, number] | undefined) => {
+      if (!node || !spec) return
+      node.classList.add('tc-rb')
+      node.style.setProperty('--dx', spec[0] + 'px')
+      node.style.setProperty('--dy', spec[1] + 'px')
+      node.style.setProperty('--r', spec[2] / 2 + 'px')
+      tc.appendChild(node)
+    }
+    for (const k of ['Q', 'W', 'E', 'R', 'D', 'F']) {
+      const n = r.querySelector<HTMLElement>(`.slot[data-key="${k}"]`)
+      place(n, L[k])
+      const ang = L.LVLUP?.ang?.[k]
+      if (n && ang !== undefined) {
+        const rad = (ang * Math.PI) / 180
+        n.style.setProperty('--lx', Math.cos(rad) * L.LVLUP.out + 'px')
+        n.style.setProperty('--ly', Math.sin(rad) * L.LVLUP.out + 'px')
+      }
+    }
+    place(r.querySelector<HTMLElement>('.islot.trinket'), L.ward)
+    place(r.querySelector<HTMLElement>('.recall-btn'), L.recall)
+    const items = el('div', 'tc-items')
+    items.style.setProperty('--dx', L.ITEMS.dx + 'px')
+    items.style.setProperty('--dy', L.ITEMS.dy + 'px')
+    items.style.setProperty('--isz', L.ITEMS.size + 'px')
+    r.querySelectorAll<HTMLElement>('.items .islot:not(.trinket)').forEach(n => items.appendChild(n))
+    tc.appendChild(items)
+    const left = el('div', 'tc-left')
+    const gold = r.querySelector<HTMLElement>('.gold-btn'), qb = r.querySelector<HTMLElement>('.tc-qbuy')
+    if (gold) left.appendChild(gold)
+    if (qb) left.appendChild(qb)
+    tc.appendChild(left)
+    const status = el('div', 'tc-status')
+    for (const sel of ['.portrait', '.bars', '.buffs']) {
+      const n = r.querySelector<HTMLElement>(sel)
+      if (n) status.appendChild(n)
+    }
+    tc.appendChild(status)
+  }
+
+  private qbId = ''
+  private updateQuickBuy(me: Champion) {
+    const btn = this.root.querySelector<HTMLElement>('.tc-qbuy')
+    if (!btn) return
+    const owned = (id: string): boolean => {
+      if (me.hasItem(id)) return true
+      // a component already built into something we own
+      const inside = (x: string, depth = 0): boolean => depth < 4 && (ITEM_MAP[x]?.from ?? []).some(f => f === id || inside(f, depth + 1))
+      return me.items.some(x => !!x && inside(x))
+    }
+    const next = me.def.build.find(id => !owned(id) && !(ITEM_MAP[id].unique === 'boots' && me.items.some(x => x && ITEM_MAP[x].unique === 'boots' && ITEM_MAP[x].price >= ITEM_MAP[id].price)))
+    if (!next) { btn.classList.add('hidden'); return }
+    btn.classList.remove('hidden')
+    const cost = me.itemCost(next).cost
+    if (this.qbId !== next) {
+      this.qbId = next
+      btn.dataset.id = next
+      ;(btn.querySelector('.qb-icon') as HTMLElement).textContent = ITEM_MAP[next].icon
+    }
+    ;(btn.querySelector('.qb-cost') as HTMLElement).textContent = String(cost)
+    btn.classList.toggle('dis', !me.canShop() || cost > me.gold)
+  }
+
   destroy() {
+    clearTimeout(this.lpTimer)
+    clearTimeout(this.tipHideTimer)
     this.root.remove()
   }
 }

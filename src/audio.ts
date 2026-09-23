@@ -7,11 +7,38 @@ class Sfx {
   volume = 0.5
   listener = { x: 0, z: 0 }
 
+  private armed = false
+  private armHandler = () => {
+    const c = this.ensure()
+    if (!c) return
+    if (c.state !== 'running') c.resume().then(() => this.disarm()).catch(() => {})
+    else this.disarm()
+  }
+
+  get running() { return this.ctx?.state === 'running' }
+
+  /**
+   * Resume audio on the next real user activation. Touch `pointerdown` is not an activation,
+   * so listen for pointerup / touchend / click / keydown (capture, passive) until the context runs.
+   */
+  armUnlock() {
+    if (this.armed) return
+    this.armed = true
+    for (const t of ['pointerup', 'touchend', 'click', 'keydown']) window.addEventListener(t, this.armHandler, { capture: true, passive: true })
+  }
+  private disarm() {
+    if (!this.armed) return
+    this.armed = false
+    for (const t of ['pointerup', 'touchend', 'click', 'keydown']) window.removeEventListener(t, this.armHandler, { capture: true } as EventListenerOptions)
+  }
+
   private ensure() {
     if (this.ctx) return this.ctx
     try {
       const C = window.AudioContext || (window as any).webkitAudioContext
       this.ctx = new C()
+      // iOS can drop to 'interrupted' (calls, app switch): re-arm the unlock listeners
+      this.ctx.onstatechange = () => { if (this.ctx && this.ctx.state !== 'running') this.armUnlock() }
       this.master = this.ctx.createGain()
       this.master.gain.value = this.volume
       this.master.connect(this.ctx.destination)

@@ -2,7 +2,13 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#010a13" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="星核峡谷" />
     <title>星核峡谷 · Nexus Rift</title>
     <meta name="description" content="浏览器里的 5v5 MOBA：Yjs 实时联机对战，Nostr 身份与战绩。" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚔️</text></svg>" />
@@ -11,6 +17,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&display=swap" rel="stylesheet" />
   </head>
   <body>
+    <div class="rotate-gate"><div class="rg-phone"></div><div class="rg-text">请将手机横屏以进行对局</div><div class="rg-sub">对局仍在进行中 · 点击尝试全屏</div></div>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

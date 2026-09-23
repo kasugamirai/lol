@@ -1,14 +1,15 @@
 import type { App } from '../main'
-import { el, esc, onAct, toast, modal, avatarHtml, copyText, champColor, fmtTime } from './dom'
+import { el, esc, onAct, toast, modal, avatarHtml, copyText, champColor, fmtTime, confirmModal, promptModal } from './dom'
 import { setName, exportNsec, importNsec, loginNip07, createIdentity, hasNip07, shortKey } from '../nostr/identity'
 import { publishProfile, republishStats, fetchMyMatches, fetchLeaderboard, MatchRecord, LeaderRow } from '../nostr/store'
 import { MM_MODES, MMMode } from '../net/lobby'
 import { CHAMPIONS, CHAMP_MAP } from '../game/data/champions'
 import { SPELLS } from '../game/data/spells'
-import { settings, saveSettings } from '../settings'
+import { settings, saveSettings, type Settings } from '../settings'
 import { NOSTR_RELAYS, YJS_URL } from '../config'
 import { sfx } from '../audio'
 import type { MapId } from '../game/mapdef'
+import { mobileActive, applyDeviceClasses, canFullscreen, requestFullscreen } from './device'
 
 const winRate = (w: number, g: number) => (g ? Math.round((w / g) * 100) : 0) + '%'
 const kda = (k: number, d: number, a: number) => ((k + a) / Math.max(1, d)).toFixed(2)
@@ -40,6 +41,7 @@ export class MenuScreen {
       copy: () => copyText(app.id.npub),
       settings: () => settingsModal(),
       help: () => helpModal(),
+      fullscreen: () => toggleFullscreen(),
     }))
   }
 
@@ -47,11 +49,17 @@ export class MenuScreen {
     const m = modal(`<h3>快速匹配</h3><p class="muted">与在线玩家匹配对战，人数不足时由电脑补位。</p>
       <div class="mode-list">${(Object.keys(MM_MODES) as MMMode[]).map(k => `<button class="mode-btn" data-mode="${k}"><b>${MM_MODES[k].label}</b><small>${k === 'rift' ? '经典三路推塔 · 野区 · 巨龙与男爵' : '单路混战 · 3级起步 · 快节奏团战'}</small></button>`).join('')}</div>
       <div class="modal-btns"><button class="btn" data-close>取消</button></div>`)
-    m.box.querySelectorAll<HTMLElement>('[data-mode]').forEach(b => b.addEventListener('click', () => { m.close(); this.app.quickMatch(b.dataset.mode as MMMode) }))
+    m.box.querySelectorAll<HTMLElement>('[data-mode]').forEach(b => b.addEventListener('click', () => {
+      // the match starts later without a user gesture, so go fullscreen now (mobile only, best effort)
+      requestFullscreen()
+      m.close()
+      this.app.quickMatch(b.dataset.mode as MMMode)
+    }))
   }
 
-  private rename() {
-    const n = prompt('输入新的召唤师名称（最多16个字符）', this.app.id.name)
+  private async rename() {
+    const title = '输入新的召唤师名称（最多16个字符）'
+    const n = mobileActive() ? await promptModal(title, this.app.id.name, 16) : prompt(title, this.app.id.name)
     if (!n || !n.trim()) return
     setName(n.trim())
     this.app.identityChanged()
@@ -72,7 +80,7 @@ export class MenuScreen {
     const s = this.app.stats
     this.el.innerHTML = `
       <div class="menu-bg"></div>
-      <div class="menu-top"><div class="menu-conn">${connBadge(this.app)}</div><button class="icon-btn" data-act="help" title="操作说明">❔</button><button class="icon-btn" data-act="settings" title="设置">⚙️</button></div>
+      <div class="menu-top"><div class="menu-conn">${connBadge(this.app)}</div>${canFullscreen() ? '<button class="icon-btn touch-only" data-act="fullscreen" title="全屏" aria-label="全屏">⛶</button>' : ''}<button class="icon-btn" data-act="help" title="操作说明" aria-label="操作说明">❔</button><button class="icon-btn" data-act="settings" title="设置" aria-label="设置">⚙️</button></div>
       <div class="menu-center">
         <div class="logo"><div class="logo-cn">星核峡谷</div><div class="logo-en">NEXUS RIFT</div><div class="logo-sub">5v5 多人在线战术竞技 · Yjs 实时同步 · Nostr 身份</div></div>
         <div class="menu-buttons">
@@ -91,7 +99,7 @@ export class MenuScreen {
       <div class="player-card">
         ${avatarHtml(id.name, id.avatar, 58)}
         <div class="pc-info">
-          <div class="pc-name">${esc(id.name)} <button class="mini" data-act="rename" title="修改名称">✏️</button></div>
+          <div class="pc-name">${esc(id.name)} <button class="mini" data-act="rename" title="修改名称" aria-label="修改名称">✏️</button></div>
           <div class="pc-key" data-act="copy" title="点击复制 npub">${esc(shortKey(id.npub))} <span class="badge">${id.method === 'nip07' ? '扩展登录' : id.method === 'nsec' ? '私钥登录' : '自动账户'}</span></div>
           <div class="pc-stats">${s ? `积分 <b>${s.rating}</b> · ${s.games} 场 · 胜率 ${winRate(s.wins, s.games)} · KDA ${kda(s.kills, s.deaths, s.assists)}` : '暂无战绩 — 打一局吧！'}</div>
         </div>
@@ -119,7 +127,7 @@ export class RoomsScreen {
         <div class="rooms-side">
           <div class="panel create">
             <h3>创建房间</h3>
-            <label>房间名 <input class="c-name" maxlength="20" value="${esc(app.id.name)}的房间"></label>
+            <label>房间名 <input class="c-name" maxlength="20" value="${esc(app.id.name)}的房间" enterkeyhint="done" autocomplete="off"></label>
             <label>地图 <select class="c-map"><option value="rift">召唤师峡谷（三路）</option><option value="aram">极地大乱斗（单路）</option></select></label>
             <label>人数 <select class="c-size">${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${n === 5 ? 'selected' : ''}>${n}v${n}</option>`).join('')}</select></label>
             <label>电脑难度 <select class="c-diff"><option value="0">简单</option><option value="1" selected>普通</option><option value="2">困难</option></select></label>
@@ -128,7 +136,7 @@ export class RoomsScreen {
           </div>
           <div class="panel">
             <h3>通过房间号加入</h3>
-            <div class="row"><input class="j-id" placeholder="房间号，例如 k3m9xa" maxlength="12"><button class="btn" data-act="join">加入</button></div>
+            <div class="row"><input class="j-id" placeholder="房间号，例如 k3m9xa" maxlength="12" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go"><button class="btn" data-act="join">加入</button></div>
           </div>
         </div>
       </div>`
@@ -146,28 +154,43 @@ export class RoomsScreen {
           priv: q<HTMLInputElement>('.c-priv').checked,
         })
       },
-      join: () => {
-        const v = (this.el.querySelector('.j-id') as HTMLInputElement).value.trim().replace(/.*room=/, '').replace(/[^a-z0-9]/gi, '')
-        if (v) app.joinRoom(v)
-      },
-      enter: t => app.joinRoom(t.dataset.id!),
+      join: () => this.join(),
+      enter: t => { requestFullscreen(); app.joinRoom(t.dataset.id!) },
     }))
+    this.el.addEventListener('keydown', e => {
+      // mobile keyboards show a 前往 key (enterkeyhint="go") on the room-id field
+      if (mobileActive() && e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && (e.target as HTMLElement).classList.contains('j-id')) this.join()
+    })
   }
 
+  private join() {
+    // room ids are lowercase; mobile keyboards like to capitalize the first letter
+    const v = (this.el.querySelector('.j-id') as HTMLInputElement).value.trim().replace(/.*room=/, '').replace(/[^a-z0-9]/gi, '').toLowerCase()
+    if (!v) return
+    requestFullscreen()
+    this.app.joinRoom(v)
+  }
+
+  private listHtml = ''
+  private connHtml = ''
   private renderList() {
     const box = this.el.querySelector('.rl-items')
     if (!box) return
+    // only touch the DOM when something changed: rewriting nodes under a finger drops the tap
     const conn = this.el.querySelector('.rooms-conn')
-    if (conn) conn.innerHTML = connBadge(this.app)
+    const connHtml = connBadge(this.app)
+    if (conn && connHtml !== this.connHtml) { conn.innerHTML = connHtml; this.connHtml = connHtml }
     const rooms = this.app.lobby.rooms()
-    box.innerHTML = rooms.length ? rooms.map(r => `
+    const html = rooms.length ? rooms.map(r => `
       <div class="room-row">
         <div class="rr-map ${r.map}">${r.map === 'aram' ? '❄️' : '🌲'}</div>
         <div class="rr-info"><b>${esc(r.name)}</b><div class="muted">${MAP_NAME[r.map]} · ${r.teamSize}v${r.teamSize} · 房主 ${esc(r.ownerName)} · #${esc(r.id)}</div></div>
-        <div class="rr-n">${r.humans}/${r.teamSize * 2}</div>
-        <div class="rr-st ${r.status}">${r.status === 'lobby' ? '等待中' : '游戏中'}</div>
+        <div class="rr-meta"><div class="rr-n">${r.humans}/${r.teamSize * 2}</div><div class="rr-st ${r.status}">${r.status === 'lobby' ? '等待中' : '游戏中'}</div></div>
         <button class="btn ${r.status === 'lobby' ? 'btn-teal' : ''}" data-act="enter" data-id="${esc(r.id)}">${r.status === 'lobby' ? '加入' : '观战'}</button>
       </div>`).join('') : `<div class="empty-note">暂无公开房间。创建一个房间，把房间号发给朋友吧！<br><span class="muted">也可以使用「快速匹配」与在线玩家对战。</span></div>`
+    if (html === this.listHtml) return
+    this.listHtml = html
+    box.innerHTML = html
   }
 
   destroy() {
@@ -220,7 +243,7 @@ export class ProfileScreen {
 
   private importKey() {
     const m = modal(`<h3>导入 Nostr 私钥</h3><p class="muted">粘贴 nsec1… 或 64 位十六进制私钥。当前的自动账户将被替换（请先备份）。</p>
-      <input class="imp" placeholder="nsec1..." autocomplete="off"><div class="modal-btns"><button class="btn" data-close>取消</button><button class="btn-gold" data-ok>导入</button></div>`)
+      <input class="imp" placeholder="nsec1..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"><div class="modal-btns"><button class="btn" data-close>取消</button><button class="btn-gold" data-ok>导入</button></div>`)
     m.box.querySelector('[data-ok]')!.addEventListener('click', () => {
       try {
         importNsec((m.box.querySelector('.imp') as HTMLInputElement).value)
@@ -243,8 +266,9 @@ export class ProfileScreen {
     } catch (e: any) { toast(e.message ?? String(e), 'err') }
   }
 
-  private newId() {
-    if (!confirm('创建新账户将替换当前账户。如未备份私钥，当前账户将无法找回。确定继续？')) return
+  private async newId() {
+    const q = '创建新账户将替换当前账户。如未备份私钥，当前账户将无法找回。确定继续？'
+    if (!(mobileActive() ? await confirmModal(q, '创建新账户', true) : confirm(q))) return
     createIdentity()
     this.app.identityChanged()
     this.matches = null
@@ -295,6 +319,7 @@ export class ProfileScreen {
             <button class="btn" data-act="nip07" ${hasNip07() ? '' : 'disabled title="未检测到 Nostr 浏览器扩展"'}>🧩 扩展登录 (NIP-07)</button>
             <button class="btn danger" data-act="newid">🆕 创建新账户</button>
           </div>
+          ${hasNip07() ? '' : '<div class="muted small touch-only nip07-note">移动端浏览器通常不支持 Nostr 扩展，可使用「导入私钥」</div>'}
           <div class="muted small">你的身份是一个 Nostr 密钥对：进入房间时会用私钥签名证明身份，战绩以 NIP-78 应用数据 (kind 30078) 发布到以下中继：</div>
           <div class="relays">${NOSTR_RELAYS.map(r => `<span class="relay mono">${esc(r)}</span>`).join('')}</div>
         </div>`
@@ -336,19 +361,31 @@ export function practiceModal(app: App) {
     settings.spells = [sp0, sp1 === sp0 ? SPELLS.find(s => s.id !== sp0)!.id : sp1]
     settings.lastChamp = champ
     saveSettings()
+    requestFullscreen()
     m.close()
     app.createRoom({ name: '人机练习', map: settings.practiceMap, teamSize: settings.practiceSize, botDiff: settings.botDiff, priv: true, fill: true, autostart: true })
   })
 }
 
+const sel = (on: boolean) => (on ? 'selected' : '')
+const pct = (v: number) => Math.round(v * 100) + '%'
+
 export function settingsModal() {
   const m = modal(`<h3>设置</h3>
     <label>音量 <input type="range" min="0" max="1" step="0.05" class="s-vol" value="${settings.volume}"></label>
-    <label>施法方式 <select class="s-cast"><option value="quick" ${settings.castMode === 'quick' ? 'selected' : ''}>快速施法（按键即释放，朝向鼠标）</option><option value="indicator" ${settings.castMode === 'indicator' ? 'selected' : ''}>指示器施法（按住显示范围，松开释放）</option></select></label>
-    <label>画质 <select class="s-q"><option value="1" ${settings.quality === 1 ? 'selected' : ''}>高（抗锯齿 + 高清）</option><option value="0" ${settings.quality === 0 ? 'selected' : ''}>性能优先</option></select></label>
+    <label>操作模式 <select class="s-mobile"><option value="auto" ${sel(settings.mobileMode === 'auto')}>自动检测</option><option value="on" ${sel(settings.mobileMode === 'on')}>触屏</option><option value="off" ${sel(settings.mobileMode === 'off')}>键鼠</option></select></label>
+    <label class="kbd-only">施法方式 <select class="s-cast"><option value="quick" ${sel(settings.castMode === 'quick')}>快速施法（按键即释放，朝向鼠标）</option><option value="indicator" ${sel(settings.castMode === 'indicator')}>指示器施法（按住显示范围，松开释放）</option></select></label>
+    <div class="touch-only s-touch">
+      <label>摇杆 <select class="s-joy"><option value="dynamic" ${sel(settings.joyMode === 'dynamic')}>动态（跟随拇指）</option><option value="fixed" ${sel(settings.joyMode === 'fixed')}>固定位置</option></select></label>
+      <label>攻击优先 <select class="s-atk"><option value="lowhp" ${sel(settings.atkPri === 'lowhp')}>血量最低的英雄</option><option value="near" ${sel(settings.atkPri === 'near')}>距离最近的英雄</option></select></label>
+      <label>界面缩放 <input type="range" min="0.8" max="1.3" step="0.05" class="s-uis" value="${settings.uiScale}"><span class="s-val s-uis-v">${pct(settings.uiScale)}</span></label>
+      <label>镜头距离 <input type="range" min="0.7" max="1" step="0.02" class="s-zoom" value="${settings.touchZoom}"><span class="s-val s-zoom-v">${pct(settings.touchZoom)}</span></label>
+      <label class="chk"><input type="checkbox" class="s-aimcam" ${settings.aimCam ? 'checked' : ''}> 远程技能瞄准时镜头前移</label>
+    </div>
+    <label>画质 <select class="s-q"><option value="1" ${sel(settings.quality === 1)}>高（抗锯齿 + 高清）</option><option value="0" ${sel(settings.quality === 0)}>性能优先</option></select></label>
     <label class="chk"><input type="checkbox" class="s-shadow" ${settings.shadows ? 'checked' : ''}> 实时阴影</label>
-    <label class="chk"><input type="checkbox" class="s-edge" ${settings.edgePan ? 'checked' : ''}> 屏幕边缘移动镜头（镜头解锁时）</label>
-    <label class="chk"><input type="checkbox" class="s-lock" ${settings.camLock ? 'checked' : ''}> 默认锁定镜头跟随英雄</label>
+    <label class="chk kbd-only"><input type="checkbox" class="s-edge" ${settings.edgePan ? 'checked' : ''}> 屏幕边缘移动镜头（镜头解锁时）</label>
+    <label class="chk kbd-only"><input type="checkbox" class="s-lock" ${settings.camLock ? 'checked' : ''}> 默认锁定镜头跟随英雄</label>
     <label class="chk"><input type="checkbox" class="s-fps" ${settings.showFps ? 'checked' : ''}> 显示 FPS</label>
     <div class="modal-btns"><button class="btn-gold" data-close>完成</button></div>`)
   const b = m.box
@@ -361,6 +398,19 @@ export function settingsModal() {
     settings.edgePan = q<HTMLInputElement>('.s-edge').checked
     settings.camLock = q<HTMLInputElement>('.s-lock').checked
     settings.showFps = q<HTMLInputElement>('.s-fps').checked
+    settings.joyMode = q<HTMLSelectElement>('.s-joy').value as Settings['joyMode']
+    settings.atkPri = q<HTMLSelectElement>('.s-atk').value as Settings['atkPri']
+    settings.uiScale = Number(q<HTMLInputElement>('.s-uis').value) || 1
+    settings.touchZoom = Number(q<HTMLInputElement>('.s-zoom').value) || 0.82
+    settings.aimCam = q<HTMLInputElement>('.s-aimcam').checked
+    q('.s-uis-v').textContent = pct(settings.uiScale)
+    q('.s-zoom-v').textContent = pct(settings.touchZoom)
+    const mode = q<HTMLSelectElement>('.s-mobile').value as Settings['mobileMode']
+    if (mode !== settings.mobileMode) {
+      settings.mobileMode = mode
+      // the in-game touch UI is frozen per match; menus switch right away
+      if (!document.body.classList.contains('in-game')) applyDeviceClasses()
+    }
     sfx.setVolume(settings.volume)
     saveSettings()
   })
@@ -369,15 +419,32 @@ export function settingsModal() {
 export function helpModal() {
   modal(`<h3>操作说明</h3>
     <div class="help">
-      <div><kbd>右键</kbd> 移动 / 攻击目标（按住持续移动）</div>
-      <div><kbd>A</kbd> + <kbd>左键</kbd> 攻击移动　<kbd>S</kbd> 停止</div>
-      <div><kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd><kbd>R</kbd> 释放技能（朝向鼠标）</div>
-      <div><kbd>Alt/Ctrl</kbd> + <kbd>Q</kbd>… 升级技能（或点击技能上方的 +）</div>
-      <div><kbd>D</kbd><kbd>F</kbd> 召唤师技能　<kbd>1</kbd>-<kbd>7</kbd> 使用物品　<kbd>4</kbd> 放置守卫</div>
-      <div><kbd>B</kbd> 回城　<kbd>P</kbd> 商店（泉水内或阵亡时购买）</div>
-      <div><kbd>Tab</kbd> 数据面板　<kbd>Y</kbd> 锁定/解锁镜头　<kbd>空格</kbd> 镜头回到英雄</div>
-      <div><kbd>G</kbd> 标记信号　<kbd>Enter</kbd> 聊天　<kbd>Esc</kbd> 菜单　滚轮缩放</div>
+      <div class="kbd-only">
+        <div><kbd>右键</kbd> 移动 / 攻击目标（按住持续移动）</div>
+        <div><kbd>A</kbd> + <kbd>左键</kbd> 攻击移动　<kbd>S</kbd> 停止</div>
+        <div><kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd><kbd>R</kbd> 释放技能（朝向鼠标）</div>
+        <div><kbd>Alt/Ctrl</kbd> + <kbd>Q</kbd>… 升级技能（或点击技能上方的 +）</div>
+        <div><kbd>D</kbd><kbd>F</kbd> 召唤师技能　<kbd>1</kbd>-<kbd>7</kbd> 使用物品　<kbd>4</kbd> 放置守卫</div>
+        <div><kbd>B</kbd> 回城　<kbd>P</kbd> 商店（泉水内或阵亡时购买）</div>
+        <div><kbd>Tab</kbd> 数据面板　<kbd>Y</kbd> 锁定/解锁镜头　<kbd>空格</kbd> 镜头回到英雄</div>
+        <div><kbd>G</kbd> 标记信号　<kbd>Enter</kbd> 聊天　<kbd>Esc</kbd> 菜单　滚轮缩放</div>
+      </div>
+      <div class="touch-only">
+        <div>🕹️ 左侧拖动摇杆移动</div>
+        <div>🎯 右下 ⚔ 普通攻击（按住持续攻击，自动选目标；🗡 补刀优先小兵，🏰 推塔优先建筑）</div>
+        <div>✨ 技能：点击快速释放，按住拖动瞄准，拖到「取消」放弃</div>
+        <div>➕ 技能旁 + 升级 · 点击敌人锁定攻击目标</div>
+        <div>🗺️ 左上小地图：按住查看、长按发信号</div>
+        <div>💰 商店 · 🛒 一键购买 · 🏠 回城 · 右上 📊 数据 / 💬 聊天 / ⚙️ 菜单</div>
+        <div class="muted small">对局需横屏进行；操作模式可在 设置 中切换（下局生效）</div>
+      </div>
       <p class="muted">目标：摧毁敌方的防御塔、水晶枢纽，最终摧毁敌方星核即可获胜。击杀小兵和野怪获取金币与经验，击杀巨龙和男爵获得团队增益。</p>
     </div>
     <div class="modal-btns"><button class="btn-gold" data-close>明白了</button></div>`)
+}
+
+/** menu fullscreen button (touch-only, rendered only where the Fullscreen API exists) */
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {})
+  else requestFullscreen()
 }

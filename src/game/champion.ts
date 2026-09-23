@@ -519,18 +519,7 @@ export class Champion extends Unit {
       case 'unit':
       case 'ally': {
         let t = w.unit(tid)
-        const ok = (u: Unit | null): u is Unit => {
-          if (!u || u.dead || !u.targetable()) return false
-          if (u.isStructure || u.kind === 'ward') return false
-          if (def.champOnly && !u.isChamp) return false
-          const team = def.unitTeam ?? (def.target === 'ally' ? 'ally' : 'enemy')
-          if (team === 'enemy' && u.team === this.team) return false
-          if (team === 'ally' && u.team !== this.team) return false
-          if (u === this && def.target !== 'ally') return false
-          if (u.team !== this.team && !w.canSee(this.team, u)) return false
-          return true
-        }
-        if (!ok(t)) {
+        if (!castTargetOk(this, def, t)) {
           if (def.selfCast) t = this
           else return 'notarget'
         }
@@ -772,6 +761,19 @@ export interface ChampSave {
   d: number
   a: number
   cs: number
+}
+
+/** can `me` target `u` with the unit/ally skill `def` (the rules tryCast uses; also used by touch targeting) */
+export function castTargetOk(me: Champion, def: SkillDef, u: Unit | null): u is Unit {
+  if (!u || u.dead || !u.targetable()) return false
+  if (u.isStructure || u.kind === 'ward') return false
+  if (def.champOnly && !u.isChamp) return false
+  const team = def.unitTeam ?? (def.target === 'ally' ? 'ally' : 'enemy')
+  if (team === 'enemy' && u.team === me.team) return false
+  if (team === 'ally' && u.team !== me.team) return false
+  if (u === me && def.target !== 'ally') return false
+  if (u.team !== me.team && !me.world.canSee(me.team, u)) return false
+  return true
 }
 
 export function clampHp(u: Unit) {

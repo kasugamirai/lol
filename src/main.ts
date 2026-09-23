@@ -6,8 +6,9 @@ import { MatchRoom, slotTeam } from './net/room'
 import { RoomScreen } from './ui/roomscreen'
 import { GameScreen } from './ui/game'
 import { MenuScreen, RoomsScreen, ProfileScreen, practiceModal } from './ui/screens'
-import { el, esc, toast, fmtTime } from './ui/dom'
-import { settings } from './settings'
+import { el, esc, toast, fmtTime, closeTopModal, confirmModal, MODAL_OPEN_EVENT } from './ui/dom'
+import { settings, saveSettings } from './settings'
+import { initDevice, isTouchDevice, mobileActive, applyDeviceClasses, unlockOrientation, requestFullscreen } from './ui/device'
 import { sfx } from './audio'
 import type { MapId } from './game/mapdef'
 import { randId } from './util/math'
@@ -21,11 +22,16 @@ export class App {
   room: MatchRoom | null = null
   private screen: Screen | null = null
   private mmBox: HTMLDivElement | null = null
+  private mmMode: MMMode | null = null
   private mmTimer = 0
+  /** a sentinel history entry is on top (mobile back-button handling) */
+  backArmed = false
   private adTimer = 0
   private statsCbs = new Set<() => void>()
 
   constructor() {
+    // reload / restored tab: we are already standing on our sentinel entry, do not stack another one
+    this.backArmed = mobileActive() && history.state?.nr === 1
     const { id, created } = loadIdentity()
     this.id = id
     if (created) setTimeout(() => toast(`已为你自动创建 Nostr 账户：${id.name}`, 'ok', 4000), 400)
@@ -33,7 +39,8 @@ export class App {
     this.lobby.onMatched = (o, owner) => this.onMatched(o, owner)
     this.refreshStats()
     sfx.setVolume(settings.volume)
-    window.addEventListener('pointerdown', () => sfx.unlock(), { once: true })
+    // resume audio on the next real user activation (touch pointerdown does not count)
+    sfx.armUnlock()
     this.adTimer = window.setInterval(() => this.advertise(), 3000)
     const qs = new URLSearchParams(location.search)
     const roomParam = qs.get('room')
@@ -59,10 +66,44 @@ export class App {
   }
 
   private setScreen(s: Screen | null) {
-    this.screen?.destroy()
+    const prev = this.screen
+    prev?.destroy()
     this.screen = s
     document.body.classList.toggle('in-game', s instanceof GameScreen)
+    if (prev instanceof GameScreen && !(s instanceof GameScreen)) {
+      unlockOrientation()
+      // apply a mode change that was deferred while the match was running
+      applyDeviceClasses()
+    }
+    this.armBack()
     this.renderMM()
+  }
+
+  /** mobile: keep one sentinel history entry on top so the back button stays inside the app */
+  armBack() {
+    if (this.backArmed || !mobileActive()) return
+    history.pushState({ nr: 1 }, '')
+    this.backArmed = true
+  }
+
+  /** back button / gesture: true if handled (the sentinel is then re-armed), false to let the browser leave */
+  handleBack(): boolean {
+    if (closeTopModal()) return true
+    const s = this.screen
+    if (s instanceof GameScreen) {
+      ;(s as any).handleBack?.()
+      return true
+    }
+    if (s instanceof RoomScreen) {
+      if (!s.handleBack()) {
+        confirmModal('离开房间？', '离开房间', true).then(ok => { if (ok && this.screen === s) this.leaveRoom(true) })
+      }
+      return true
+    }
+    if (s instanceof RoomsScreen || s instanceof ProfileScreen) { this.showMenu(); return true }
+    if (s instanceof MenuScreen || !s) return false
+    // loading screen: stay put, the pending join/create resolves on its own
+    return true
   }
 
   showMenu() { this.setScreen(new MenuScreen(this)) }
@@ -239,7 +280,7 @@ export class App {
   private renderMM() {
     const t = this.lobby.ticket
     const inGame = this.screen instanceof GameScreen
-    if (!t || inGame) { this.mmBox?.remove(); this.mmBox = null; return }
+    if (!t || inGame) { this.mmBox?.remove(); this.mmBox = null; this.mmMode = null; return }
     if (!this.mmBox) {
       this.mmBox = el('div', 'mm-box')
       document.body.appendChild(this.mmBox)
@@ -249,20 +290,73 @@ export class App {
         else if (t.closest('[data-mm=now]')) this.lobby.startNow()
       })
     }
-    const secs = (Date.now() - t.since) / 1000
-    const n = this.lobby.queueCount(t.mode)
-    this.mmBox.innerHTML = `<div class="mm-spin"></div><div><b>正在匹配 · ${MM_MODES[t.mode].label}</b><div class="mm-sub">${fmtTime(secs)} · 队列中 ${n} 人 · 在线 ${this.lobby.online()} 人${n < 2 ? '<br>等待更多玩家加入… 或点击「立即开始」由电脑补位' : '<br>「立即开始」将与当前队列中的玩家开局'}</div></div>
+    // build the skeleton once per mode; the 500 ms refresh only updates text so taps on the buttons are never lost
+    if (this.mmMode !== t.mode) {
+      this.mmMode = t.mode
+      this.mmBox.innerHTML = `<div class="mm-spin"></div><div><b>正在匹配 · ${esc(MM_MODES[t.mode].label)}</b><div class="mm-sub"><span class="mm-time"></span> · 队列中 <span class="mm-count"></span> 人 · 在线 <span class="mm-online"></span> 人<span class="mm-hint"><br><span class="mm-hint-t"></span></span></div></div>
       <div class="mm-btns"><button class="btn-gold" data-mm="now">立即开始</button><button class="btn" data-mm="cancel">取消</button></div>`
+    }
+    const n = this.lobby.queueCount(t.mode)
+    const set = (sel: string, v: string) => { const e = this.mmBox!.querySelector(sel); if (e && e.textContent !== v) e.textContent = v }
+    set('.mm-time', fmtTime((Date.now() - t.since) / 1000))
+    set('.mm-count', String(n))
+    set('.mm-online', String(this.lobby.online()))
+    set('.mm-hint-t', n < 2 ? '等待更多玩家加入… 或点击「立即开始」由电脑补位' : '「立即开始」将与当前队列中的玩家开局')
   }
 }
 
+const LS_HINT = 'nexusrift.mobileHint'
+
 function boot() {
-  const touch = matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches
-  if (touch || window.innerWidth < 700) {
-    setTimeout(() => toast('星核峡谷需要键盘和鼠标操作，建议使用电脑浏览器游玩', 'info', 6000), 800)
+  initDevice()
+  // one-time low-quality default on phones/tablets (hardware check, not the UI mode); the user can raise it later
+  if (isTouchDevice() && !settings.mobilePerfInit) {
+    settings.quality = 0
+    settings.shadows = false
+    settings.mobilePerfInit = true
+    saveSettings()
   }
   const app = new App()
   ;(window as any).__app = app
+  bindGlobal(app)
+  if (mobileActive()) {
+    let seen = true
+    try { seen = !!localStorage.getItem(LS_HINT); localStorage.setItem(LS_HINT, '1') } catch { /* private mode */ }
+    if (!seen) setTimeout(() => toast('横屏游玩体验更佳 · 可「添加到主屏幕」获得全屏体验', 'info', 5000), 1200)
+  }
+}
+
+/** page-level listeners: audio re-arm, iOS touch quirks, back button, rotate gate */
+function bindGlobal(app: App) {
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sfx.armUnlock() })
+  // iOS only applies :active styles when a touchstart listener exists
+  document.addEventListener('touchstart', () => {}, { passive: true })
+  // iOS Safari ignores user-scalable=no for pinch; macOS Safari fires this for trackpad pinch too, so gate it
+  document.addEventListener('gesturestart', e => { if (mobileActive()) e.preventDefault() })
+  // iOS leaves the fixed layout scrolled after the keyboard closes
+  document.addEventListener('focusout', () => {
+    if (!document.body.classList.contains('mobile')) return
+    setTimeout(() => {
+      const a = document.activeElement
+      if (!(a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a instanceof HTMLSelectElement)) window.scrollTo(0, 0)
+    }, 60)
+  })
+  window.addEventListener('popstate', () => {
+    if (!app.backArmed) return
+    app.backArmed = false
+    // leaving a room strips ?room= from the sentinel; keep the entry we land on clean too
+    const q = new URLSearchParams(location.search)
+    if (!app.room && q.has('room')) {
+      q.delete('room')
+      const qs = q.toString()
+      history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''))
+    }
+    if (app.handleBack()) app.armBack()
+  })
+  app.armBack()
+  // after the menu consumed a back press, a newly opened modal re-arms it so back closes the modal
+  document.addEventListener(MODAL_OPEN_EVENT, () => app.armBack())
+  document.querySelector('.rotate-gate')?.addEventListener('click', () => requestFullscreen())
 }
 
 boot()

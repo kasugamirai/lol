@@ -9,11 +9,15 @@ import { Champion } from '../game/champion'
 import { CastKey, Team } from '../game/types'
 import { settings } from '../settings'
 import { sfx } from '../audio'
-import { el, esc, toast, champColor, fmtTime } from './dom'
+import { el, esc, toast, champColor, fmtTime, confirmModal } from './dom'
 import { ITEM_MAP } from '../game/data/items'
 import { recordMatch, MatchRecord } from '../nostr/store'
 import { dist } from '../util/math'
 import type { SkillDef } from '../game/skills'
+import type { CastResult } from '../game/champion'
+import { mobileActive, DEV, lockLandscape, unlockOrientation, isPortrait } from './device'
+import { TouchControls, TouchHost } from './touch'
+import '../touch.css'
 
 export interface GameOpts {
   room: MatchRoom
@@ -28,7 +32,9 @@ const CAST_ERR: Record<string, string> = {
   cooldown: '技能冷却中', mana: '法力值不足', unlearned: '技能尚未学习', cc: '无法施放', notarget: '无效的目标', nocharge: '没有可用的守卫', busy: '',
 }
 
-export class GameScreen {
+const ZERO = { x: 0, z: 0 }
+
+export class GameScreen implements TouchHost {
   readonly el: HTMLDivElement
   world: World
   net: NetGame
@@ -54,10 +60,19 @@ export class GameScreen {
   private errAt = 0
   private unsub: (() => void)[] = []
   private startedAt = Date.now()
+  /** touch UI, frozen for the whole match */
+  readonly touchUI = mobileActive()
+  touch: TouchControls | null = null
+  private gated = false
+  private wake: any = null
+  private touchHinted = false
+
+  get root() { return this.el }
 
   constructor(private o: GameOpts) {
     const info = o.room.info!
     this.el = el('div', 'game-screen')
+    if (this.touchUI) this.el.classList.add('touch')
     document.getElementById('app')!.appendChild(this.el)
     const slots: SlotConfig[] = o.room.entries().map(([k, s]) => ({
       slot: k, team: slotTeam(k), champ: s.champ ?? 'blaze', name: s.name, pk: s.pk, bot: s.kind === 'bot',
@@ -66,7 +81,7 @@ export class GameScreen {
     const seed = info.seed ?? 1
     this.world = new World(info.map, slots, o.slot, seed)
     const w = this.world
-    this.ren = new GameRenderer(this.el, w, { shadows: settings.shadows, quality: settings.quality })
+    this.ren = new GameRenderer(this.el, w, { shadows: settings.shadows, quality: settings.quality, mobile: this.touchUI })
     this.ren.locked = this.locked
     this.minimap = new Minimap(this.el, w)
     this.net = new NetGame(o.room, w, o.me, o.slot)
@@ -79,10 +94,11 @@ export class GameScreen {
       chat: (t, all) => o.room.say({ n: o.me.name, pk: o.me.pk, t, tm: all ? -1 : w.myTeam }),
       quit: () => this.quit(),
       applySettings: () => {},
+      applyTouch: () => { this.touch?.relayout(); this.ren.setZoomTarget(settings.touchZoom) },
     }, {
       hostLabel: () => (w.isHost ? '👑主机' : this.net.peers > 0 ? '🔗同步' : '⏳') + ` ${this.net.peers + 1}人`,
       ping: () => o.room.yr.status === 'connected' ? '' : '⚠️离线',
-    })
+    }, { touch: this.touchUI })
     w.hooks = {
       float: f => this.ren.overlay.addFloat(f),
       killFeed: (k, v) => this.hud.killFeed(k, v),
@@ -91,8 +107,23 @@ export class GameScreen {
       ping: (_t, x, z) => { this.minimap.ping(x, z); w.fx({ kind: 'ping', x, z, r: 1.4, color: 0xffd24a, dur: 2.2 }); sfx.play('ward') },
       gameOver: win => this.onGameOver(win),
     }
-    this.minimap.onLeft = (x, z) => { this.locked = false; this.ren.centerOn(x, z) }
-    this.minimap.onRight = (x, z) => { w.me?.cmdMove(x, z); w.fx({ kind: 'click', x, z, r: 0.9, color: 0x6aff8a, dur: 0.45 }) }
+    if (this.touchUI) {
+      this.hud.setTouchLayout()
+      this.touch = new TouchControls(this)
+      this.locked = true
+      this.ren.setZoomTarget(settings.touchZoom)
+      this.minimap.onLeft = (x, z) => { if (this.touch) this.touch.lookHeld = true; this.ren.centerOn(x, z) }
+      this.minimap.onLeftEnd = () => { if (this.touch) this.touch.lookHeld = false }
+      this.minimap.onPing = (x, z) => { if (w.me) this.ping(x, z) }
+      this.minimap.onRight = null
+      this.hud.onPanel = open => { if (open) this.touch?.cancelAll() }
+      lockLandscape()
+      this.bindTouchEnv()
+    } else {
+      this.minimap.onLeft = (x, z) => { this.locked = false; this.ren.centerOn(x, z) }
+      this.minimap.onRight = (x, z) => { w.me?.cmdMove(x, z); w.fx({ kind: 'click', x, z, r: 0.9, color: 0x6aff8a, dur: 0.45 }) }
+    }
+    this.bindVisibility()
 
     // chat feed
     const onChat = (ev: any) => {
@@ -114,14 +145,19 @@ export class GameScreen {
     }))
 
     this.bindInput()
-    this.hud.chatLine('', w.me ? `欢迎来到${w.map.name}！按 P 打开商店购买装备，右键移动，QWER 释放技能。` : '你正在观战这场对局。', 0, false, true)
-    if (w.me) this.hud.chatLine('', '升级技能：点击技能图标上方的 + 或按 Alt/Ctrl + Q/W/E/R', 0, false, true)
+    if (this.touchUI) {
+      this.hud.chatLine('', w.me ? `欢迎来到${w.map.name}！左侧摇杆移动，右下角 ⚔ 攻击；点击技能快速释放，按住拖动瞄准，拖到「取消」放弃施法。` : '你正在观战这场对局。拖动屏幕移动镜头。', 0, false, true)
+      if (w.me) this.hud.chatLine('', '升级技能：点击技能旁的 +；💰 打开商店，🛒 一键购买推荐装备。', 0, false, true)
+    } else {
+      this.hud.chatLine('', w.me ? `欢迎来到${w.map.name}！按 P 打开商店购买装备，右键移动，QWER 释放技能。` : '你正在观战这场对局。', 0, false, true)
+      if (w.me) this.hud.chatLine('', '升级技能：点击技能图标上方的 + 或按 Alt/Ctrl + Q/W/E/R', 0, false, true)
+    }
     this.hud.announce(w.map.name, '欢迎来到峡谷', '#f0e6d2')
     const blob = new Blob(['let t=setInterval(()=>postMessage(0),33);onmessage=e=>{if(e.data==="stop"){clearInterval(t);close()}}'], { type: 'text/javascript' })
     try {
       this.worker = new Worker(URL.createObjectURL(blob))
       this.worker.onmessage = () => {
-        if (!this.running) return
+        if (!this.running || this.net.suspended) return
         const now = performance.now()
         // keep simulating/syncing even when rAF is throttled (background tab, occluded window)
         if (now - this.lastStep > 45) this.step(now)
@@ -144,19 +180,34 @@ export class GameScreen {
   }
 
   private lastFrame = performance.now()
+  private lastRaf = 0
   private frame = (tms: number) => {
     if (!this.running) return
     cancelAnimationFrame(this.raf)
     this.raf = requestAnimationFrame(this.frame)
     const now = performance.now()
+    // touch: thin out >60 Hz displays (120 Hz → 60, 144 Hz → 72) using the vsync-aligned rAF timestamp;
+    // 60/90 Hz are never skipped. The worker keeps the sim stepping.
+    if (this.touchUI) {
+      if (tms - this.lastRaf < 10 && tms >= this.lastRaf) return
+      this.lastRaf = tms
+    }
     this.step(now)
     const dt = Math.min(0.25, (now - this.lastFrame) / 1000)
     this.lastFrame = now
     if (dt <= 0) return
+    // portrait on a phone: rotate gate covers the screen; keep sim/net alive, skip render + HUD
+    if (this.gated) return
     this.fpsAcc += dt; this.fpsN++
     if (this.fpsAcc > 0.5) { this.hud.fps = this.fpsN / this.fpsAcc; this.fpsAcc = 0; this.fpsN = 0 }
     this.updateInput(dt, now)
-    const follow = this.locked || this.spaceHeld
+    const t = this.touch
+    if (t) {
+      t.update(now)
+      this.ren.hovered = t.hoverTarget()
+    }
+    this.ren.lead = t ? t.camLead() : ZERO
+    const follow = t ? !t.lookHeld : this.locked || this.spaceHeld
     this.ren.locked = this.locked
     this.ren.updateCamera(dt, follow)
     sfx.listener.x = this.ren.camTarget.x
@@ -169,15 +220,16 @@ export class GameScreen {
       this.minimapAt = now
       this.minimap.draw(this.ren.cameraCorners())
     }
-    void tms
   }
 
   // ------------------------------------------------------------------ input
   private bindInput() {
     const c = this.el
-    const onMove = (e: MouseEvent) => { this.mouse.x = e.clientX; this.mouse.y = e.clientY; this.mouse.in = true }
+    const touchish = () => !!this.touch && (DEV.mouseTouch || performance.now() - this.touch.lastTouch < 800)
+    const onMove = (e: MouseEvent) => { if (touchish()) return; this.mouse.x = e.clientX; this.mouse.y = e.clientY; this.mouse.in = true }
     const onDown = (e: MouseEvent) => {
       sfx.unlock()
+      if (touchish()) return
       if ((e.target as HTMLElement).closest('.hud-bottom, .shop, .scoreboard, .gmenu, .minimap, .chat')) return
       this.mouse.x = e.clientX; this.mouse.y = e.clientY
       const me = this.world.me
@@ -213,8 +265,8 @@ export class GameScreen {
     const onLeave = () => { this.mouse.in = false }
     const onKeyDown = (e: KeyboardEvent) => this.onKey(e, true)
     const onKeyUp = (e: KeyboardEvent) => this.onKey(e, false)
-    const onResize = () => this.ren.resize()
-    const onBlur = () => { this.rightHeld = false; this.spaceHeld = false; this.hud.showScoreboard(false) }
+    const onResize = () => { if (!this.touch) this.ren.resize() }
+    const onBlur = () => { this.rightHeld = false; this.spaceHeld = false; if (!this.touch) this.hud.showScoreboard(false) }
     c.addEventListener('mousemove', onMove)
     c.addEventListener('mousedown', onDown)
     window.addEventListener('mouseup', onUp)
@@ -265,6 +317,7 @@ export class GameScreen {
         return
       }
       if (code === 'Tab') { hud.showScoreboard(true); e.preventDefault(); return }
+      if (this.touch && (code === 'Space' || code === 'KeyY')) return
       if (code === 'Space') { this.spaceHeld = true; e.preventDefault(); return }
       if (code === 'KeyY') { this.locked = !this.locked; settings.camLock = this.locked; toast(this.locked ? '镜头已锁定' : '镜头已解锁（屏幕边缘/小地图移动镜头）', 'info', 1400); return }
       if (code === 'KeyP') { hud.toggleShop(); return }
@@ -289,10 +342,8 @@ export class GameScreen {
       if (code === 'KeyS') { me.cmdStop(); this.amove = false; return }
       if (code === 'KeyA') { this.amove = true; return }
       if (code === 'KeyG') {
-        const [x, z] = this.ren.screenToGround(this.mouse.x, this.mouse.y)
-        const ev = { e: 'ping' as const, tm: me.team, x: +x.toFixed(1), z: +z.toFixed(1), src: me.id, pk: 0 }
-        this.world.emit(ev)
-        this.world.handleEvent(ev, false)
+        const [x, z] = this.touch ? [me.x, me.z] : this.ren.screenToGround(this.mouse.x, this.mouse.y)
+        this.ping(x, z)
         return
       }
     } else {
@@ -308,6 +359,8 @@ export class GameScreen {
   private castKey(key: CastKey) {
     const w = this.world, me = w.me
     if (!me) return
+    // touch UI with a hardware keyboard (tablets): there is no cursor to aim with, smart-cast instead
+    if (this.touch) { this.touch.keyCast(key); return }
     const def = me.castDef(key)
     if (!def) return
     const [gx, gz] = this.ren.screenToGround(this.mouse.x, this.mouse.y)
@@ -333,15 +386,38 @@ export class GameScreen {
       }
       tid = u?.id
     }
-    const r = me.tryCast(key, gx, gz, tid)
-    if (r !== 'ok' && r !== 'moving') {
-      const msg = CAST_ERR[r]
-      const now = performance.now()
-      if (msg && now - this.errAt > 600) { this.errAt = now; this.hud.chatLine('', msg, 0, false, true); sfx.play('error') }
-    }
+    this.doCast(key, gx, gz, tid)
+  }
+
+  /** cast through the champion; reports errors unless quiet (TouchHost) */
+  doCast(key: CastKey, x: number, z: number, tid?: string, quiet = false): CastResult {
+    const me = this.world.me
+    if (!me) return 'none'
+    const r = me.tryCast(key, x, z, tid)
+    if (!quiet && r !== 'ok' && r !== 'moving') this.castErr(r)
+    return r
+  }
+
+  castErr(r: CastResult) {
+    const msg = CAST_ERR[r]
+    const now = performance.now()
+    if (msg && now - this.errAt > 600) { this.errAt = now; this.hud.chatLine('', msg, 0, false, true); sfx.play('error') }
+  }
+
+  ping(x: number, z: number) {
+    const me = this.world.me
+    if (!me) return
+    const ev = { e: 'ping' as const, tm: me.team, x: +x.toFixed(1), z: +z.toFixed(1), src: me.id, pk: 0 }
+    this.world.emit(ev)
+    this.world.handleEvent(ev, false)
+  }
+
+  minimapResize(px: number) {
+    this.minimap.resize(px)
   }
 
   private updateInput(dt: number, now: number) {
+    if (this.touch) return
     const me = this.world.me
     if (this.rightHeld && me && now >= this.rightNext) {
       this.rightNext = now + 140
@@ -369,6 +445,13 @@ export class GameScreen {
   private updateIndicator() {
     const me = this.world.me
     if (!me || me.dead) { this.ren.setIndicator(null); return }
+    if (this.touch) {
+      const s = this.touch.indicator()
+      if (s) this.ren.setIndicator(s)
+      else if (this.touch.showAtkRange()) this.ren.setIndicator(null, me.stats.range + me.radius)
+      else this.ren.setIndicator(null)
+      return
+    }
     if (this.pendingKey) {
       const def = me.castDef(this.pendingKey)
       if (def) { this.ren.setIndicator(this.specFor(def)); return }
@@ -377,15 +460,15 @@ export class GameScreen {
     this.ren.setIndicator(null)
   }
 
-  private specFor(def: SkillDef): IndicatorSpec {
-    const [tx, tz] = this.ren.screenToGround(this.mouse.x, this.mouse.y)
+  specFor(def: SkillDef, tx?: number, tz?: number, color?: number): IndicatorSpec {
+    if (tx === undefined || tz === undefined) [tx, tz] = this.ren.screenToGround(this.mouse.x, this.mouse.y)
     const i = def.ind
     switch (i.t) {
-      case 'line': return { kind: 'line', range: def.range, width: i.w ?? 1, tx, tz }
-      case 'circle': return { kind: 'circle', range: def.target === 'self' ? i.r ?? 2 : def.range, radius: i.r ?? 2, tx, tz }
-      case 'cone': return { kind: 'cone', range: i.r ?? def.range, angle: i.a ?? 0.5, tx, tz }
-      case 'range': return { kind: 'range', range: def.range, tx, tz }
-      default: return { kind: 'none', range: 0, tx, tz }
+      case 'line': return { kind: 'line', range: def.range, width: i.w ?? 1, tx, tz, color }
+      case 'circle': return { kind: 'circle', range: def.target === 'self' ? i.r ?? 2 : def.range, radius: i.r ?? 2, tx, tz, color }
+      case 'cone': return { kind: 'cone', range: i.r ?? def.range, angle: i.a ?? 0.5, tx, tz, color }
+      case 'range': return { kind: 'range', range: def.range, tx, tz, color }
+      default: return { kind: 'none', range: 0, tx, tz, color }
     }
   }
 
@@ -407,8 +490,8 @@ export class GameScreen {
       <div class="result-box">
         <div class="result-title ${win === false ? 'lose' : 'win'}">${win === null ? (winner === 0 ? '蓝色方胜利' : '红色方胜利') : win ? '胜利' : '失败'}</div>
         <div class="result-sub">${esc(w.map.name)} · 时长 ${fmtTime(dur)} · 蓝 ${w.teamKills[0]} : ${w.teamKills[1]} 红</div>
-        ${[0, 1].map(t => `<div class="sb-team t${t}"><div class="sb-head">${t === 0 ? '蓝色方' : '红色方'}${t === winner ? ' 🏆' : ''}</div>
-          <table><tr><th></th><th>玩家</th><th>K/D/A</th><th>补刀</th><th>英雄伤害</th><th>装备</th></tr>${w.champs.filter(c => c.team === t).map(row).join('')}</table></div>`).join('')}
+        <div class="result-teams">${[0, 1].map(t => `<div class="sb-team t${t}"><div class="sb-head">${t === 0 ? '蓝色方' : '红色方'}${t === winner ? ' 🏆' : ''}</div>
+          <table><tr><th></th><th>玩家</th><th>K/D/A</th><th>补刀</th><th>英雄伤害</th><th>装备</th></tr>${w.champs.filter(c => c.team === t).map(row).join('')}</table></div>`).join('')}</div>
         <div class="result-nostr">${me ? '正在将战绩写入 Nostr…' : ''}</div>
         <div class="result-btns"><button class="btn-gold" data-r="room">返回房间</button><button class="btn" data-r="menu">返回主页</button></div>
       </div>`
@@ -430,9 +513,118 @@ export class GameScreen {
     }
   }
 
-  private quit() {
-    if (!confirm('确定要退出这场对局吗？（你的英雄将由主机托管）')) return
+  private async quit() {
+    const msg = '确定要退出这场对局吗？（你的英雄将由主机托管）'
+    const ok = this.touchUI ? await confirmModal(msg, '退出对局', true) : confirm(msg)
+    if (!ok || !this.running) return
     this.exit(false)
+  }
+
+  /** Android back button / history pop while in a match. Always consumes it. */
+  handleBack(): boolean {
+    // result screen: back = 返回房间
+    if (this.resultShown) { this.exit(true); return true }
+    if (this.touch?.handleBack()) return true
+    const hud = this.hud
+    if (hud.scoreboardOpen) { hud.showScoreboard(false); return true }
+    if (hud.closePanels()) return true
+    hud.toggleMenu(!hud.menuOpen)
+    return true
+  }
+
+  // ------------------------------------------------------------------ mobile environment
+  private bindTouchEnv() {
+    // resize: ResizeObserver catches URL-bar/fullscreen changes that `resize` misses on iOS
+    let rafId = 0
+    let lastW = 0, lastH = 0
+    const relayout = () => {
+      rafId = 0
+      const r = this.el.getBoundingClientRect()
+      const inputFocused = document.activeElement instanceof HTMLInputElement
+      // the on-screen keyboard only changes height: don't reflow the HUD under the user's fingers
+      if (inputFocused && Math.abs(r.width - lastW) < 1 && lastW) return
+      lastW = r.width; lastH = r.height
+      this.ren.resize()
+      this.touch?.relayout()
+    }
+    const sched = () => { if (!rafId) rafId = requestAnimationFrame(relayout) }
+    const ro = new ResizeObserver(sched)
+    ro.observe(this.el)
+    let orT = 0
+    const onOrient = () => { sched(); clearTimeout(orT); orT = window.setTimeout(sched, 300) }
+    screen.orientation?.addEventListener?.('change', onOrient)
+    window.addEventListener('orientationchange', onOrient)
+    window.addEventListener('resize', sched)
+    // rotate gate
+    const mq = matchMedia('(orientation: portrait)')
+    const onGate = () => {
+      this.gated = isPortrait()
+      if (this.gated) this.touch?.cancelAll()
+      else sched()
+    }
+    onGate()
+    mq.addEventListener?.('change', onGate)
+    this.requestWake()
+    this.unsub.push(() => {
+      ro.disconnect()
+      cancelAnimationFrame(rafId)
+      clearTimeout(orT)
+      screen.orientation?.removeEventListener?.('change', onOrient)
+      window.removeEventListener('orientationchange', onOrient)
+      window.removeEventListener('resize', sched)
+      mq.removeEventListener?.('change', onGate)
+      void lastH
+    })
+  }
+
+  private bindVisibility() {
+    if (!this.touchUI) {
+      // mouse UI: the match keeps simulating in background tabs exactly as before; only hint that touch mode exists
+      const onFirstTouch = (e: PointerEvent) => {
+        if (this.touchHinted || e.pointerType !== 'touch') return
+        this.touchHinted = true
+        if (settings.mobileMode === 'auto' && new URLSearchParams(location.search).get('mobile') !== '0') toast('检测到触屏：可在 设置→操作模式 切换为触屏（下局生效）', 'info', 4000)
+      }
+      this.el.addEventListener('pointerdown', onFirstTouch)
+      return
+    }
+    // phones: the OS freezes background pages, so step out of the match cleanly and rejoin on return
+    const onVis = () => {
+      const now = performance.now()
+      if (document.hidden) {
+        this.touch?.cancelAll()
+        this.net.suspend(now)
+      } else {
+        if (this.net.suspended) this.net.resume(now)
+        // time spent hidden must not be simulated as one giant step
+        this.lastStep = now
+        this.requestWake()
+        sfx.armUnlock()
+      }
+    }
+    const onHide = () => { this.touch?.cancelAll(); this.net.suspend(performance.now()) }
+    const onShow = (e: PageTransitionEvent) => { if (e.persisted && !document.hidden && this.net.suspended) onVis() }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('pagehide', onHide)
+    window.addEventListener('pageshow', onShow)
+    this.unsub.push(() => {
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('pagehide', onHide)
+      window.removeEventListener('pageshow', onShow)
+    })
+  }
+
+  private wakePending = false
+  private async requestWake() {
+    if (this.wakePending || !('wakeLock' in navigator) || document.hidden || !this.running) return
+    if (this.wake && !this.wake.released) return
+    this.wakePending = true
+    try {
+      const lock = await (navigator as any).wakeLock.request('screen')
+      if (this.running) this.wake = lock
+      else lock.release?.().catch?.(() => {})
+    } catch { this.wake = null }
+    this.wakePending = false
   }
 
   private exit(toRoom: boolean) {
@@ -446,6 +638,12 @@ export class GameScreen {
     cancelAnimationFrame(this.raf)
     this.worker?.postMessage('stop')
     this.worker?.terminate()
+    this.touch?.destroy()
+    this.touch = null
+    this.minimap.destroy()
+    if (this.touchUI) unlockOrientation()
+    try { this.wake?.release?.().catch?.(() => {}) } catch { /* ignore */ }
+    this.wake = null
     for (const u of this.unsub) u()
     this.net.destroy()
     this.hud.destroy()

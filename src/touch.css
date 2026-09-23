@@ -1,0 +1,320 @@
+/* ============================================================
+   In-game touch HUD (.game-screen.touch). Reference layout: 844x390 landscape phone.
+   --s (UI scale) is set inline by TouchControls.relayout(). Safe-area vars come from styles.css
+   (body.mobile); the fallbacks below keep this file self-sufficient.
+   ============================================================ */
+
+.game-screen.touch {
+  --s: 1;
+  --st: var(--sat, env(safe-area-inset-top, 0px));
+  --sl: max(8px, var(--sal, env(safe-area-inset-left, 0px)));
+  --sr: max(8px, var(--sar, env(safe-area-inset-right, 0px)));
+  --sb: max(4px, var(--sab, env(safe-area-inset-bottom, 0px)));
+  touch-action: none;
+  cursor: auto;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.game-screen.touch.cur-attack { cursor: auto; }
+/* scroll containers keep native panning (touch-action intersects up to the nearest scroller) */
+.game-screen.touch :is(.shop-grid, .shop-detail, .shop-tabs, .scoreboard, .gm-box, .gmenu, .result-ov, .result-box, .chat.open .log, .tooltip) {
+  touch-action: pan-x pan-y;
+}
+.game-screen.touch input[type=range] { touch-action: none; }
+
+/* death: a cheap tint instead of a full-screen CSS filter */
+.game-screen.touch.dead .game-canvas { filter: none; }
+.game-screen.touch.dead .overlay-canvas { background: rgba(20, 22, 30, .45); }
+
+/* the desktop bottom bar stays in the DOM (stats-mini is still updated) but is not shown */
+.game-screen.touch .hud-bottom { display: none; }
+
+/* ------------------------------------------------------------ layer */
+.game-screen.touch .hud > .tc { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.game-screen.touch .tc > * { pointer-events: auto; }
+
+/* generic right-cluster button: centre = anchor + (dx, dy), anchor = (right 66, bottom 62) */
+.game-screen.touch .tc-rb {
+  position: absolute; box-sizing: border-box;
+  width: calc(var(--r) * 2 * var(--s)); height: calc(var(--r) * 2 * var(--s));
+  right: calc(var(--sr) + (66px - var(--dx) - var(--r)) * var(--s));
+  bottom: calc(var(--sb) + (62px - var(--dy) - var(--r)) * var(--s));
+  border-radius: 50%;
+  touch-action: none;
+  transition: transform .06s, filter .06s;
+}
+
+/* skill + summoner slots */
+.game-screen.touch .slot.tc-rb {
+  border: 2px solid #6a5630; background: rgba(8, 12, 18, .72); overflow: visible; cursor: default;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .55), inset 0 0 0 1px rgba(0, 0, 0, .6);
+}
+.game-screen.touch .slot.tc-rb .icon { border-radius: 50%; font-size: calc(26px * var(--s)); }
+.game-screen.touch .slot.spell.tc-rb .icon { font-size: calc(20px * var(--s)); }
+.game-screen.touch .slot.tc-rb .cdov { border-radius: 50%; }
+.game-screen.touch .slot.tc-rb .cdtxt { font-size: calc(16px * var(--s)); }
+.game-screen.touch .tc .kl { display: none; }
+.game-screen.touch .slot.tc-rb .cost { right: 50%; transform: translateX(50%); bottom: calc(-4px * var(--s)); font-size: 9px; border-radius: 3px; }
+.game-screen.touch .slot.tc-rb .pips { bottom: auto; top: calc(-5px * var(--s)); }
+.game-screen.touch .slot.tc-rb .pips i { width: 5px; height: 3px; }
+.game-screen.touch .slot.tc-rb.oncd { border-color: #3a3428; }
+.game-screen.touch .slot.tc-rb.press { transform: scale(.94); filter: brightness(1.25); }
+.game-screen.touch .slot.skill.tc-rb:not(.unlearned):not(.oncd):not(.nomana) { border-color: #c8aa6e; }
+
+/* level-up badge: outward along the skill's arc angle (--lx/--ly), with a 6px invisible hit slop */
+.game-screen.touch .slot.tc-rb .lvlup {
+  top: calc(50% + (var(--ly, 0px) - 14px) * var(--s)); left: calc(50% + (var(--lx, 0px) - 14px) * var(--s));
+  width: calc(28px * var(--s)); height: calc(28px * var(--s)); border-radius: 50%;
+  transform: none; animation: tcbob 1s ease-in-out infinite; font-size: calc(17px * var(--s)); z-index: 2;
+  box-shadow: 0 0 10px rgba(240, 200, 80, .7);
+}
+.game-screen.touch .slot.tc-rb .lvlup::before { content: ''; position: absolute; inset: -6px; border-radius: 50%; }
+@keyframes tcbob { 50% { transform: scale(1.12); } }
+
+/* ward (trinket) + items */
+.game-screen.touch .islot.tc-rb { border: 2px solid #8a7a3a; background: rgba(8, 12, 18, .72); overflow: hidden; }
+.game-screen.touch .islot.tc-rb .icon { font-size: calc(18px * var(--s)); }
+.game-screen.touch .islot.tc-rb .charges { right: 50%; transform: translateX(50%); top: auto; bottom: 1px; font-size: 9px; }
+.game-screen.touch .islot.press { transform: scale(.94); filter: brightness(1.25); }
+
+.game-screen.touch .tc-items {
+  position: absolute; display: flex; flex-direction: row-reverse; flex-wrap: wrap; gap: 4px; overflow: hidden;
+  height: calc(var(--isz) * var(--s));
+  right: calc(var(--sr) + (66px - var(--dx) - var(--isz) / 2) * var(--s));
+  bottom: calc(var(--sb) + (62px - var(--dy) - var(--isz) / 2) * var(--s));
+  max-width: calc(6 * var(--isz) * var(--s) + 20px);
+  pointer-events: none;
+}
+.game-screen.touch .tc-items .islot {
+  width: calc(var(--isz) * var(--s)); height: calc(var(--isz) * var(--s)); border-radius: 8px; overflow: hidden;
+  border: 1px solid #5a4a28; background: rgba(8, 12, 18, .75); pointer-events: auto; flex: none;
+}
+.game-screen.touch .tc-items .islot .icon { font-size: calc(18px * var(--s)); }
+.game-screen.touch .tc-items .islot.empty, .game-screen.touch .tc-items .islot.noact { display: none; }
+.game-screen.touch.tc-narrow .tc-items { max-width: calc(3 * var(--isz) * var(--s) + 10px); }
+
+/* recall */
+.game-screen.touch .recall-btn.tc-rb {
+  border: 2px solid #2a5a8a; background: radial-gradient(circle at 50% 40%, #16304c, #07101c); color: #fff;
+  font-size: calc(17px * var(--s)); padding: 0; box-shadow: 0 2px 8px rgba(0, 0, 0, .55);
+}
+
+/* attack buttons */
+.game-screen.touch .tc-atk {
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid #c8aa6e; color: #fff;
+  background: radial-gradient(circle at 50% 38%, #6a3a22, #2a1208 70%, #120804);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .6), inset 0 0 12px rgba(255, 170, 90, .25);
+}
+.game-screen.touch .tc-atk span { pointer-events: none; font-size: calc(var(--r) * .8 * var(--s)); line-height: 1; filter: drop-shadow(0 1px 2px #000); }
+.game-screen.touch .tc-atk-main span { font-size: calc(32px * var(--s)); }
+.game-screen.touch .tc-atk-minion, .game-screen.touch .tc-atk-tower { border-color: #7a6538; background: radial-gradient(circle at 50% 38%, #3a2a1a, #120c06 75%); }
+.game-screen.touch .tc-atk.press { transform: scale(.93); filter: brightness(1.3); }
+.game-screen.touch.tc-narrow .tc-atk-minion, .game-screen.touch.tc-narrow .tc-atk-tower { display: none; }
+
+/* cancel zone: laid out (so it can be measured) but invisible until aiming */
+.game-screen.touch .tc-cancel {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0;
+  border: 2px dashed rgba(255, 255, 255, .55); background: rgba(40, 10, 10, .55); color: #fff;
+  opacity: 0; pointer-events: none !important; transition: opacity .1s, transform .1s, background .1s;
+}
+.game-screen.touch .tc-cancel span { font-size: calc(22px * var(--s)); line-height: 1; }
+.game-screen.touch .tc-cancel small { font-size: 10px; }
+.game-screen.touch .tc-cancel.show { opacity: 1; }
+.game-screen.touch .tc-cancel.hot { background: rgba(200, 40, 40, .85); border-style: solid; border-color: #fff; transform: scale(1.12); }
+
+/* joystick (visual only; hit zone is logic) */
+.game-screen.touch .tc-joy {
+  position: absolute; left: 0; top: 0; width: calc(116px * var(--s)); height: calc(116px * var(--s));
+  pointer-events: none !important; opacity: .35; transition: opacity .12s; will-change: transform;
+}
+.game-screen.touch .tc-joy.on { opacity: 1; transition: none; }
+.game-screen.touch .tc-joy-ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 2px solid rgba(200, 170, 110, .7); background: radial-gradient(circle, rgba(10, 20, 36, .25), rgba(10, 20, 36, .55));
+}
+.game-screen.touch .tc-joy-knob {
+  position: absolute; left: calc(50% - 26px * var(--s)); top: calc(50% - 26px * var(--s));
+  width: calc(52px * var(--s)); height: calc(52px * var(--s)); border-radius: 50%;
+  background: radial-gradient(circle at 45% 38%, #f0e6d2, #c8aa6e 55%, #785a28);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .6); will-change: transform;
+}
+
+/* skill aim ring, drawn at the finger's press point */
+.game-screen.touch .tc-aim {
+  --ar: 72px;
+  position: absolute; left: 0; top: 0; width: calc(var(--ar) * 2); height: calc(var(--ar) * 2);
+  pointer-events: none !important; display: none; will-change: transform;
+}
+.game-screen.touch .tc-aim.on { display: block; }
+.game-screen.touch .tc-aim-ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 2px solid rgba(120, 200, 255, .75); background: radial-gradient(circle, rgba(40, 90, 150, .1), rgba(40, 90, 150, .3));
+}
+.game-screen.touch .tc-aim-knob {
+  position: absolute; left: calc(50% - 20px); top: calc(50% - 20px); width: 40px; height: 40px; border-radius: 50%;
+  background: radial-gradient(circle at 45% 38%, #e8f6ff, #6ab4ff 60%, #1a4a8a); box-shadow: 0 0 12px rgba(100, 180, 255, .7);
+}
+
+/* ------------------------------------------------------------ left + top */
+.game-screen.touch .minimap {
+  left: calc(var(--sl) + 4px); top: calc(var(--st) + 4px); right: auto; bottom: auto;
+  border-width: 1px; touch-action: none; z-index: 4;
+}
+
+.game-screen.touch .tc-left {
+  position: absolute; display: flex; flex-direction: column; gap: 4px;
+  left: calc(var(--sl) + 4px); top: calc(var(--st) + 4px + 116px * var(--s) + 6px); width: calc(116px * var(--s));
+}
+.game-screen.touch .tc-left .gold-btn {
+  flex: none; height: calc(30px * var(--s)); padding: 0 8px; font-size: calc(13px * var(--s)); text-align: left; border-radius: 4px;
+}
+.game-screen.touch .tc-qbuy {
+  display: flex; align-items: center; gap: 6px; height: calc(34px * var(--s)); padding: 0 8px; border-radius: 4px;
+  border: 1px solid #c8aa6e; background: linear-gradient(#3a2e12, #16110a); color: #f0d060; font-size: calc(13px * var(--s));
+}
+.game-screen.touch .tc-qbuy .qb-icon { font-size: calc(18px * var(--s)); }
+.game-screen.touch .tc-qbuy .qb-cost::before { content: '🛒 '; font-size: .85em; }
+.game-screen.touch .tc-qbuy.dis { filter: grayscale(.8) brightness(.7); border-color: #5a4a28; }
+.game-screen.touch .tc-left button:active, .game-screen.touch .tc-tr button:active, .game-screen.touch .recall-btn:active { filter: brightness(1.3); }
+
+.game-screen.touch .tc-status {
+  position: absolute; display: grid; grid-template-columns: calc(40px * var(--s)) calc(120px * var(--s));
+  grid-template-areas: "p b" "p u"; column-gap: 6px; row-gap: 3px; align-items: start;
+  left: calc(var(--sl) + 4px + 116px * var(--s) + 6px); top: calc(var(--st) + 4px);
+  pointer-events: none;
+}
+.game-screen.touch .tc-status .portrait { grid-area: p; width: calc(40px * var(--s)); height: calc(40px * var(--s)); margin: 0; pointer-events: auto; }
+.game-screen.touch .tc-status .portrait .face { inset: 4px; font-size: calc(16px * var(--s)); border-width: 1px; }
+.game-screen.touch .tc-status .portrait .lvl { width: calc(17px * var(--s)); height: calc(17px * var(--s)); font-size: 10px; bottom: -4px; right: -4px; }
+.game-screen.touch .tc-status .bars { grid-area: b; width: auto; margin: 0; gap: 2px; }
+.game-screen.touch .tc-status .bar.hp { height: calc(12px * var(--s)); }
+.game-screen.touch .tc-status .bar.mp { height: calc(7px * var(--s)); }
+.game-screen.touch .tc-status .bar span { font-size: 9px; }
+.game-screen.touch .tc-status .bar.mp span { display: none; }
+.game-screen.touch .tc-status .buffs { grid-area: u; min-height: 0; flex-wrap: wrap; gap: 2px; pointer-events: auto; }
+.game-screen.touch .tc-status .buff { width: calc(18px * var(--s)); height: calc(18px * var(--s)); font-size: calc(11px * var(--s)); }
+
+.game-screen.touch .hud-top { top: var(--st); padding: 2px 10px; gap: 10px; }
+.game-screen.touch .team-score { min-width: 0; font-size: 15px; }
+.game-screen.touch .team-score small { display: none; }
+.game-screen.touch .clock { font-size: 13px; min-width: 44px; }
+.game-screen.touch .hud-tr { right: calc(var(--sr) + 4px); top: calc(var(--st) + 4px); gap: 8px; padding: 2px 6px; font-size: 11px; }
+.game-screen.touch .tc-tr {
+  position: absolute; right: calc(var(--sr) + 4px); top: calc(var(--st) + 28px * var(--s)); display: flex; gap: 6px;
+  transition: opacity .12s;
+}
+.game-screen.touch .tc-tr button {
+  position: relative; width: calc(34px * var(--s)); height: calc(34px * var(--s)); border-radius: 50%; padding: 0;
+  border: 1px solid var(--gold2); background: rgba(10, 20, 36, .8); color: var(--gold-l); font-size: calc(15px * var(--s));
+}
+.game-screen.touch .tc-tr button::before { content: ''; position: absolute; inset: -5px; border-radius: 50%; }
+.game-screen.touch.aiming .tc-tr { opacity: .25; pointer-events: none; }
+.game-screen.touch.aiming .tc-tr button { pointer-events: none; }
+
+.game-screen.touch .killfeed { right: auto; left: 50%; transform: translateX(-50%); top: calc(var(--st) + 30px); align-items: center; gap: 2px; max-width: 34vw; }
+.game-screen.touch .kf-row { font-size: 11px; padding: 1px 6px; }
+.game-screen.touch .kf-row:nth-child(n+3) { display: none; }
+.game-screen.touch .kf-row .kf-face { width: 18px; height: 18px; font-size: 10px; }
+.game-screen.touch .announce { top: calc(var(--st) + 100px); }
+.game-screen.touch .a-text { font-size: 22px; letter-spacing: 2px; }
+.game-screen.touch .a-sub { font-size: 12px; }
+.game-screen.touch .deathov .d1 { font-size: 24px; }
+.game-screen.touch .deathov .d2 { font-size: 15px; }
+.game-screen.touch :is(.recallbar, .castbar) { bottom: calc(var(--sb) + 70px * var(--s)); width: calc(200px * var(--s)); }
+.game-screen.touch .spec-banner { bottom: calc(var(--sb) + 8px); font-size: 13px; padding: 4px 14px; }
+
+/* chat: display-only log under the status block; opens at the top so the keyboard does not cover it */
+.game-screen.touch .chat { left: calc(var(--sl) + 126px * var(--s)); top: calc(var(--st) + 76px * var(--s)); bottom: auto; width: calc(220px * var(--s)); }
+.game-screen.touch .chat .log { max-height: calc(4 * 1.45em); font-size: 11px; line-height: 1.45; }
+.game-screen.touch .chat.open {
+  top: calc(var(--st) + 4px); z-index: 40; width: min(460px, calc(100vw - var(--sl) - var(--sr) - 140px * var(--s)));
+  background: rgba(1, 10, 19, .88); border: 1px solid var(--gold2); padding: 6px;
+  flex-direction: row; flex-wrap: wrap; align-items: center;
+}
+/* keep the input + buttons within ~150px of the top: phone keyboards cover the rest */
+.game-screen.touch .chat.open .log { flex: 1 1 100%; max-height: min(22vh, 90px); max-height: min(22dvh, 90px); font-size: 12px; }
+.game-screen.touch .chat-in { font-size: 16px; min-height: 36px; box-sizing: border-box; width: auto; flex: 1 1 120px; min-width: 0; }
+.game-screen.touch .chat-btns { display: flex; gap: 6px; flex: none; }
+.game-screen.touch .chat-btns button { min-width: 52px; min-height: 36px; border: 1px solid var(--gold2); background: #111820; color: var(--gold-l); font-size: 13px; }
+.game-screen.touch .chat-btns button.on { background: #3a2a10; color: #f0d060; border-color: var(--gold); }
+
+.game-screen.touch .tooltip { max-width: min(340px, calc(100vw - 16px)); z-index: 60; }
+
+/* game menu touch block */
+.game-screen.touch .gm-touch { border-top: 1px solid #1e2a3a; margin-top: 8px; padding-top: 6px; }
+.game-screen.touch .gm-touch .btn { margin: 6px 0; }
+.game-screen.touch .gm-skills summary { cursor: pointer; color: var(--gold-l); padding: 8px 0; font-size: 14px; }
+.game-screen.touch .gm-skill { border-top: 1px solid #16202e; padding: 6px 0; font-size: 12px; }
+.game-screen.touch .gm-box label { min-height: 36px; margin: 4px 0; }
+.game-screen.touch .gm-box label:has(> input[type=checkbox]) { justify-content: flex-start; }
+.game-screen.touch .gm-box select { font-size: 14px; min-height: 32px; }
+.game-screen.touch .gm-btns button { min-height: 42px; }
+
+/* shop buy button inside the selected card */
+.game-screen.touch .si-buy {
+  display: block; width: 100%; margin-top: 4px; min-height: 30px; padding: 0;
+  border: 1px solid #f0e6d2; background: linear-gradient(#c8aa6e, #785a28); color: #1a1408; font-weight: 700; font-size: 13px;
+}
+.game-screen.touch .shop-head .x { width: 36px; height: 36px; }
+.game-screen.touch .inv-it button { min-height: 28px; padding: 2px 10px; }
+.game-screen.touch .inv-it button[data-armed] { background: #6a1a1a; color: #fff; border-color: #ff8a7a; }
+
+/* debug overlay (?touchdebug=1) */
+.tc-debug {
+  position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%); z-index: 100; pointer-events: none;
+  font: 11px ui-monospace, Menlo, monospace; color: #9f9; background: rgba(0, 0, 0, .7); padding: 2px 6px; white-space: nowrap;
+}
+
+/* ------------------------------------------------------------ phone landscape overlays */
+@media (max-height: 500px) and (orientation: landscape) {
+  .game-screen.touch .shop {
+    left: var(--sl); right: var(--sr); top: 4px; bottom: var(--sb);
+    width: auto; height: auto; max-width: none; max-height: none; transform: none; z-index: 30;
+  }
+  .game-screen.touch .shop-head { padding: 4px 10px; font-size: 14px; gap: 10px; }
+  .game-screen.touch .shop-tabs { overflow-x: auto; flex-wrap: nowrap; padding: 2px 8px 0; scrollbar-width: none; }
+  .game-screen.touch .shop-tabs::-webkit-scrollbar { display: none; }
+  .game-screen.touch .shop-tabs button { flex: none; padding: 6px 12px; min-height: 36px; }
+  .game-screen.touch .shop-body { grid-template-columns: minmax(0, 1fr) minmax(200px, 34%); }
+  .game-screen.touch .shop-grid { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); padding: 8px; gap: 6px; }
+  .game-screen.touch .shop-item { padding: 6px 3px; }
+  .game-screen.touch .si-icon { font-size: 24px; }
+  .game-screen.touch .si-name { font-size: 11px; }
+  .game-screen.touch .shop-detail { padding: 8px; font-size: 12px; }
+  .game-screen.touch .shop-detail .buy-btn { order: -1; min-height: 40px; }
+
+  .game-screen.touch .scoreboard {
+    top: 4px; left: var(--sl); right: var(--sr); width: auto; max-width: none; transform: none;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: start;
+    max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow: auto; padding: 8px; z-index: 25;
+  }
+  .game-screen.touch .scoreboard .sb-team { margin: 0; }
+  .game-screen.touch .scoreboard .sb-head { font-size: 11px; padding: 4px 6px; }
+  .game-screen.touch .scoreboard table { font-size: 11px; }
+  .game-screen.touch .scoreboard :is(th, td):nth-child(6) { display: none; }
+  .game-screen.touch .scoreboard td { padding: 3px 4px; }
+  .game-screen.touch .scoreboard .sb-items span { width: 16px; height: 16px; font-size: 10px; line-height: 15px; }
+
+  .game-screen.touch .gm-box {
+    width: min(440px, calc(100vw - 24px)); max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px);
+    overflow: auto; padding: 12px 16px; box-sizing: border-box; overscroll-behavior: contain;
+  }
+  .game-screen.touch .gm-box h3 { margin-bottom: 4px; }
+
+  .game-screen.touch .result-ov { align-items: flex-start; overflow: auto; }
+  .game-screen.touch .result-box { width: 100%; max-width: none; max-height: 100vh; max-height: 100dvh; padding: 8px calc(var(--sr) + 4px) 0 calc(var(--sl) + 4px); box-sizing: border-box; }
+  .game-screen.touch .result-title { font-size: 44px; letter-spacing: 10px; }
+  .game-screen.touch .result-sub { margin-bottom: 6px; font-size: 13px; }
+  .game-screen.touch .result-teams { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .game-screen.touch .result-teams table { font-size: 11px; }
+  .game-screen.touch .result-teams :is(th, td):nth-child(5) { display: none; }
+  .game-screen.touch .result-teams .sb-items span { width: 16px; height: 16px; font-size: 10px; line-height: 15px; }
+  .game-screen.touch .result-nostr { margin: 6px 0; font-size: 12px; }
+  .game-screen.touch .result-btns {
+    position: sticky; bottom: 0; padding: 10px 0 calc(10px + var(--sab, 0px));
+    background: linear-gradient(transparent, rgba(0, 0, 0, .9) 40%);
+  }
+  .game-screen.touch .result-btns button { min-height: 44px; }
+}

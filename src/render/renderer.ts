@@ -69,12 +69,17 @@ export class GameRenderer {
   private fountainCrystals: THREE.Object3D[] = []
   shadows = true
   quality = 1
+  /** touch-mode rendering profile (lower pixel-ratio caps) */
+  mobile = false
+  /** camera offset ahead of the champion (touch aiming), world units */
+  lead = { x: 0, z: 0 }
 
-  constructor(private container: HTMLElement, private world: World, opts: { shadows?: boolean; quality?: number } = {}) {
+  constructor(private container: HTMLElement, private world: World, opts: { shadows?: boolean; quality?: number; mobile?: boolean } = {}) {
     this.shadows = opts.shadows ?? true
     this.quality = opts.quality ?? 1
     this.renderer = new THREE.WebGLRenderer({ antialias: this.quality >= 1, powerPreference: 'high-performance' })
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.quality >= 1 ? 2 : 1))
+    this.mobile = !!opts.mobile
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.dprCap()))
     this.renderer.shadowMap.enabled = this.shadows
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -151,10 +156,18 @@ export class GameRenderer {
     this.renderer.domElement.style.height = this.h + 'px'
     this.camera.aspect = this.w / this.h
     this.camera.updateProjectionMatrix()
-    this.overlay.resize(this.w, this.h, Math.min(2, window.devicePixelRatio || 1))
+    this.overlay.resize(this.w, this.h, Math.min(this.mobile ? this.dprCap() : 2, window.devicePixelRatio || 1))
   }
 
   get size() { return { w: this.w, h: this.h } }
+
+  private dprCap() {
+    return this.mobile ? (this.quality >= 1 ? 1.5 : 1) : (this.quality >= 1 ? 2 : 1)
+  }
+
+  setZoomTarget(v: number) {
+    this.zoomTarget = clamp(v, 0.62, 1.45)
+  }
 
   setZoom(delta: number) {
     this.zoomTarget = clamp(this.zoomTarget + delta, 0.62, 1.45)
@@ -171,8 +184,8 @@ export class GameRenderer {
     const w = this.world
     if (follow && w.me) {
       const k = Math.min(1, dt * 10)
-      this.camTarget.x = lerp(this.camTarget.x, w.me.x, k)
-      this.camTarget.z = lerp(this.camTarget.z, w.me.z, k)
+      this.camTarget.x = lerp(this.camTarget.x, w.me.x + this.lead.x, k)
+      this.camTarget.z = lerp(this.camTarget.z, w.me.z + this.lead.z, k)
     }
     const S = w.map.size
     this.camTarget.x = clamp(this.camTarget.x, 14, S - 14)
@@ -219,7 +232,7 @@ export class GameRenderer {
     return true
   }
 
-  pickUnit(sx: number, sy: number, accept: (u: Unit) => boolean): Unit | null {
+  pickUnit(sx: number, sy: number, accept: (u: Unit) => boolean, minRad = 12): Unit | null {
     const w = this.world
     let best: Unit | null = null, bd = Infinity
     const a = { x: 0, y: 0 }, b = { x: 0, y: 0 }, c = { x: 0, y: 0 }
@@ -229,7 +242,7 @@ export class GameRenderer {
       if (!this.project(u.x, gy, u.z, a)) continue
       if (!this.project(u.x, gy + Math.min(u.height, 5), u.z, b)) continue
       this.project(u.x + u.radius + 0.35, gy, u.z, c)
-      const rad = Math.max(12, Math.abs(c.x - a.x))
+      const rad = Math.max(minRad, Math.abs(c.x - a.x))
       // distance from mouse to vertical segment a-b
       const vx = b.x - a.x, vy = b.y - a.y
       const l2 = vx * vx + vy * vy || 1
@@ -493,6 +506,8 @@ export class GameRenderer {
     this.views.clear()
     this.fog.dispose()
     this.renderer.dispose()
+    // free the GL context right away: browsers cap live contexts and a phone reuses this page for many matches
+    try { this.renderer.forceContextLoss() } catch { /* ignore */ }
     this.renderer.domElement.remove()
     this.overlay.canvas.remove()
     this.scene.traverse(o => {

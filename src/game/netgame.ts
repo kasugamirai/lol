@@ -63,7 +63,7 @@ export class NetGame {
   hostCid = -1
   private lastSend = 0
   private dirty = false
-  readonly joinedAt = Date.now()
+  joinedAt = Date.now()
   private electAt = 0
   private saveAt = 0
   restored = false
@@ -99,7 +99,61 @@ export class NetGame {
   }
 
   // ------------------------------------------------------------------ per frame
+  // ------------------------------------------------------------------ app switching (phones)
+  private suspendedAt = 0
+  private graceUntil = 0
+  /** set after an app-switch resume: our local champion state is newer than the periodic save */
+  private resumed = false
+  /** nobody else was in the match when we went to the background (practice / everyone left) */
+  private soloAtSuspend = false
+  get suspended() { return this.suspendedAt > 0 }
+
+  /** page hidden: withdraw from host election so peers take over instead of waiting on us */
+  suspend(nowMs: number) {
+    if (this.suspendedAt) return
+    // flush pending events first: peers ignore the state of a client that is not in game
+    if (this.dirty || this.outbox.length) this.send(nowMs)
+    this.suspendedAt = nowMs
+    this.soloAtSuspend = this.isSolo()
+    const st = this.room.yr.awareness.getLocalState() as any
+    if (st) this.room.yr.awareness.setLocalState({ ...st, inGame: false, w: undefined, ev: [] })
+  }
+
+  /** page visible again: after a real absence rejoin like a reconnecting player (adopt the host's state) */
+  resume(nowMs: number) {
+    if (!this.suspendedAt) return
+    const away = nowMs - this.suspendedAt
+    this.suspendedAt = 0
+    // a socket that sat in the background may be half-open: force a fresh connection
+    const reconnect = () => { try { this.room.yr.provider.disconnect(); this.room.yr.provider.connect() } catch { /* ignore */ } }
+    // alone in the match (practice): our world is the only copy, just carry on hosting it
+    if (this.soloAtSuspend) {
+      if (away >= 1500) reconnect()
+      return
+    }
+    // peers dropped us as soon as we published inGame:false (even for a short blip):
+    // come back as a newcomer and adopt the current host's state instead of reclaiming host
+    if (this.w.isHost) this.resignHost(nowMs)
+    this.hostCid = -1
+    this.lastRecv.clear()
+    this.synced = false
+    this.restored = false
+    this.startMs = nowMs
+    this.joinedAt = Date.now()
+    this.graceUntil = nowMs + 2500
+    this.lastWorld = null
+    this.resumed = true
+    if (away >= 1500) reconnect()
+  }
+
+  /** no other human in the match, nobody else connected, and our world is the settled authoritative one */
+  private isSolo() {
+    const others = this.room.entries().some(([k, s]) => s.kind === 'human' && k !== this.slot)
+    return !others && this.peers === 0 && this.restored && this.w.isHost
+  }
+
   tick(nowMs: number) {
+    if (this.suspendedAt) return
     if (nowMs >= this.electAt) {
       this.electAt = nowMs + 250
       this.elect(nowMs)
@@ -155,6 +209,8 @@ export class NetGame {
       cands.push({ cid, synced: !!s.synced, joinedAt: s.joinedAt ?? 0, slot: s.slot ?? null })
     }
     this.peers = cands.length - 1
+    // just came back from the background: wait for peers' states before claiming host
+    if (cands.length === 1 && nowMs < this.graceUntil) return
     cands.sort((a, b) => Number(b.synced) - Number(a.synced) || a.joinedAt - b.joinedAt || a.cid - b.cid)
     const host = cands[0].cid
     if (host !== this.hostCid) {
@@ -170,6 +226,8 @@ export class NetGame {
   private becomeHost() {
     const w = this.w
     this.synced = true
+    // AFK grace counts from when we started hosting (entries from an earlier stint are stale)
+    this.afkSince.clear()
     const s = this.lastWorld
     const h = w.host
     if (s) {
@@ -192,6 +250,7 @@ export class NetGame {
   }
 
   private resignHost(nowMs: number) {
+    this.afkSince.clear()
     this.w.resignHost(nowMs)
     console.info('[net] resigned host')
   }
@@ -260,6 +319,7 @@ export class NetGame {
     if (!me) return
     const fromHost = snap?.b.find(b => b.i === me.id && b.lv !== undefined)
     if (fromHost) {
+      this.resumed = false
       me.restore({ lv: fromHost.lv, xp: fromHost.xp, g: fromHost.g, it: fromHost.it, sk: fromHost.sk, k: fromHost.k, d: fromHost.d, a: fromHost.a, cs: fromHost.cs })
       if (!(fromHost.fl & F.DEAD)) {
         me.x = fromHost.x; me.z = fromHost.z
@@ -272,6 +332,7 @@ export class NetGame {
       me.tp++
       return
     }
+    if (this.resumed) { this.resumed = false; return }
     const save = this.room.saves.get(me.slot)
     if (save && this.w.time > 5) {
       me.restore(save)
