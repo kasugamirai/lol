@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { vcMat, vcMatFow, glow, TEAM_COLORS, TEAM_DARK, lambert } from './mats'
+import { vcMat, vcMatFow, glow, TEAM_COLORS, TEAM_DARK, lambert, crystal } from './mats'
 import type { ChampDef } from '../game/data/champions'
 import type { MinionType } from '../game/data/units'
 import type { MonsterType } from '../game/mapdef'
@@ -195,7 +195,7 @@ export class ChampModel {
           ])
           add(this.armL, arm(c1))
           add(this.armR, [...arm(c1), { g: G.cyl(0.04, 0.05, 1.8, 6), c: 0xe8d8b0, p: [0, -0.62, 0.2], r: [Math.PI / 2 - 0.2, 0, 0] }])
-          const star = new THREE.Mesh(G.oct(0.2), glow(0xe6c8ff, 1, false, true))
+          const star = new THREE.Mesh(G.oct(0.2), crystal(0xe6c8ff))
           star.position.set(0, -0.44, 1.08)
           this.armR.add(star)
           this.float.push(star)
@@ -211,7 +211,7 @@ export class ChampModel {
           ])
           add(this.armL, arm(0xbfe8ff))
           add(this.armR, [...arm(0xbfe8ff), { g: G.cyl(0.04, 0.05, 1.8, 6), c: 0xffffff, p: [0, -0.62, 0.2], r: [Math.PI / 2 - 0.2, 0, 0] }])
-          const cr = new THREE.Mesh(G.oct(0.24), glow(0x9fefff, 0.95, false, true))
+          const cr = new THREE.Mesh(G.oct(0.24), crystal(0x9fefff))
           cr.scale.set(0.8, 1.4, 0.8)
           cr.position.set(0, -0.44, 1.08)
           this.armR.add(cr)
@@ -317,6 +317,7 @@ export class ChampModel {
         break
       }
     }
+    this.scale *= 1.2
     this.root.scale.setScalar(this.scale)
     for (const m of this.meshes) m.castShadow = true
   }
@@ -628,10 +629,10 @@ export class TowerModel {
     base.castShadow = true
     base.receiveShadow = true
     this.alive.add(base)
-    this.crystal = new THREE.Mesh(G.oct(0.6), glow(tc, 1, false, true))
+    this.crystal = new THREE.Mesh(G.oct(0.6), crystal(tc))
     this.crystal.scale.set(0.8, 1.4, 0.8)
     this.crystal.position.y = 6.9
-    const halo = new THREE.Mesh(G.sph(0.9, 10, 8), glow(tc, 0.25, true))
+    const halo = new THREE.Mesh(G.sph(0.9, 10, 8), glow(tc, 0.12, true))
     this.crystal.add(halo)
     this.alive.add(this.crystal)
     this.root.add(this.alive)
@@ -675,9 +676,9 @@ export class InhibModel {
     this.deadRing.rotation.x = Math.PI / 2
     this.deadRing.position.y = 0.8
     this.root.add(this.deadRing)
-    this.crystal = new THREE.Mesh(G.ico(0.75, 0), glow(tc, 1, false, true))
+    this.crystal = new THREE.Mesh(G.ico(0.75, 0), crystal(tc))
     this.crystal.position.y = 2.0
-    const halo = new THREE.Mesh(G.sph(1.1, 12, 8), glow(tc, 0.2, true))
+    const halo = new THREE.Mesh(G.sph(1.1, 12, 8), glow(tc, 0.1, true))
     this.crystal.add(halo)
     this.root.add(this.crystal)
   }
@@ -706,17 +707,17 @@ export class NexusModel {
     base.castShadow = true
     base.receiveShadow = true
     this.root.add(base)
-    const main = new THREE.Mesh(G.oct(1.2), glow(tc, 1, false, true))
-    main.scale.set(1, 2.1, 1)
-    main.position.y = 4.3
+    const main = new THREE.Mesh(G.oct(1.2), crystal(tc))
+    main.scale.set(0.85, 1.8, 0.85)
+    main.position.y = 4.1
     this.crystal.add(main)
     for (let i = 0; i < 4; i++) {
-      const c = new THREE.Mesh(G.oct(0.5), glow(tc, 0.95, false, true))
+      const c = new THREE.Mesh(G.oct(0.5), crystal(tc))
       c.scale.set(0.7, 1.6, 0.7)
       c.position.set(Math.cos(i * 1.57) * 1.9, 3.2, Math.sin(i * 1.57) * 1.9)
       this.crystal.add(c)
     }
-    const halo = new THREE.Mesh(G.sph(2.4, 14, 10), glow(tc, 0.14, true))
+    const halo = new THREE.Mesh(G.sph(2.2, 14, 10), glow(tc, 0.07, true))
     halo.position.y = 4.1
     this.crystal.add(halo)
     this.root.add(this.crystal)
@@ -766,7 +767,7 @@ export function fountainMesh(team: number) {
   const pool = new THREE.Mesh(G.cyl(2.1, 2.1, 0.1, 20), glow(tc, 0.55, true))
   pool.position.y = 0.82
   g.add(pool)
-  const cr = new THREE.Mesh(G.oct(0.7), glow(tc, 1, false, true))
+  const cr = new THREE.Mesh(G.oct(0.7), crystal(tc))
   cr.scale.set(0.8, 1.6, 0.8)
   cr.position.y = 2.8
   cr.name = 'crystal'

@@ -101,7 +101,8 @@ export class GameScreen {
         for (const m of d.insert as ChatMsg[]) {
           if (m.ts < this.startedAt - 1000) continue
           if (m.tm !== -1 && m.tm !== w.myTeam && !w.spectator) continue
-          this.hud.chatLine(m.n, m.t, m.tm === -1 ? (m.pk === o.me.pk ? w.myTeam : -2) : m.tm, m.tm === -1)
+          const sender = w.champs.find(c => c.pk && c.pk === m.pk)
+          this.hud.chatLine(m.n, m.t, sender ? sender.team : m.tm === -1 ? -2 : m.tm, m.tm === -1, !!m.sys)
         }
       }
     }

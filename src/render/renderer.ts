@@ -330,6 +330,7 @@ export class GameRenderer {
       root.add(v.ring)
     } else if (u instanceof Minion) {
       v.mesh = new THREE.Mesh(minionGeometry(u.mt, u.team), vcMat)
+      v.mesh.scale.setScalar(1.15)
       v.mesh.castShadow = true
       root.add(v.mesh)
     } else if (u instanceof Monster) {
@@ -438,7 +439,7 @@ export class GameRenderer {
       if (stunned && !v.stars) { v.stars = this.starsGroup(); v.root.add(v.stars) }
       if (v.stars) {
         v.stars.visible = stunned
-        v.stars.position.y = 2.55 * v.champ.scale + u.airY
+        v.stars.position.y = 2.45 * v.champ.scale + u.airY
         v.stars.rotation.y = t * 5
       }
       const rec = !!(u.fl & F.RECALL) && !u.dead

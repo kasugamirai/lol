@@ -89,7 +89,7 @@ export class Champion extends Unit {
     this.name = cfg.name
     this.spells = cfg.spells
     this.diff = cfg.diff ?? 1
-    this.height = 2.2
+    this.height = 2.65
     this.facing = cfg.team === 0 ? Math.PI * 0.75 : -Math.PI * 0.25
     this.level = world.map.startLevel
     this.gold = world.map.startGold

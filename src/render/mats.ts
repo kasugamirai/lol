@@ -74,3 +74,18 @@ export function fadeMat(color: number, opacity = 1, additive = true, side: THREE
 
 export const TEAM_COLORS = [0x3d8bff, 0xff4b4b, 0xd9b44a] as const
 export const TEAM_DARK = [0x1d3f7a, 0x7a1d1d, 0x6a5a2a] as const
+
+const crystalCache = new Map<number, THREE.MeshPhongMaterial>()
+/** faceted, self-lit crystal material */
+export function crystal(color: number) {
+  let m = crystalCache.get(color)
+  if (!m) {
+    const c = new THREE.Color(color)
+    m = new THREE.MeshPhongMaterial({
+      color: c, emissive: c.clone().multiplyScalar(0.55), specular: 0xffffff, shininess: 90, flatShading: true,
+      transparent: true, opacity: 0.92,
+    })
+    crystalCache.set(color, m)
+  }
+  return m
+}

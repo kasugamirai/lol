@@ -247,6 +247,10 @@ export class App {
 }
 
 function boot() {
+  const touch = matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches
+  if (touch || window.innerWidth < 700) {
+    setTimeout(() => toast('星核峡谷需要键盘和鼠标操作，建议使用电脑浏览器游玩', 'info', 6000), 800)
+  }
   const app = new App()
   ;(window as any).__app = app
 }

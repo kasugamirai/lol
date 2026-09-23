@@ -58,7 +58,7 @@ export class Overlay {
     for (const c of champs) {
       if (c.dead) continue
       if (!w.visibleToMe(c)) continue
-      const y = heightAt(c.x, c.z) + c.height * (c.def.model === 'golem' ? 1.25 : 1) + c.airY
+      const y = heightAt(c.x, c.z) + c.height * (c.def.model === 'golem' ? 1.2 : 1) + c.airY
       if (!project(c.x, y, c.z, p)) continue
       if (p.x < -80 || p.y < -60 || p.x > this.w + 80 || p.y > this.h + 60) continue
       this.drawChampBar(c, p.x, p.y, w)
