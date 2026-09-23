@@ -139,7 +139,7 @@ kbd { display: inline-block; min-width: 22px; text-align: center; padding: 1px 6
 
 /* ------------------------------------------------------------ room / champ select */
 .room-screen { background: radial-gradient(ellipse at 50% 30%, #0f2240, var(--bg0) 75%); display: flex; flex-direction: column; }
-.rs-main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.rs-main { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: auto; }
 .room-top { display: flex; align-items: center; gap: 20px; padding: 14px 22px; border-bottom: 1px solid #1e2a3a; background: rgba(5,12,24,.8); }
 .room-title h2 { margin: 0; color: var(--gold-l); font-size: 22px; }
 .room-meta { font-size: 13px; color: var(--muted); margin-top: 4px; }
@@ -168,7 +168,7 @@ kbd { display: inline-block; min-width: 22px; text-align: center; padding: 1px 6
 .sc-state .wait { color: #b0a080; }
 .slot-card .x { position: absolute; right: 4px; top: 4px; padding: 0 5px; }
 .verified { color: var(--teal); font-weight: 700; }
-.room-mid { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.room-mid { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: auto; }
 .champ-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .champ-grid.small { grid-template-columns: repeat(8, 1fr); margin-top: 12px; }
 .champ-card { background: linear-gradient(#111c2c, #0a111c); border: 1px solid #243044; padding: 10px 6px; text-align: center; cursor: pointer; transition: all .12s; }
@@ -188,7 +188,7 @@ kbd { display: inline-block; min-width: 22px; text-align: center; padding: 1px 6
 .room-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: rgba(5,12,24,.85); border: 1px solid #243044; padding: 10px 12px; }
 .room-controls label { margin: 0; font-size: 13px; }
 .room-controls select { padding: 5px; font-size: 13px; }
-.room-chat { height: 150px; border-top: 1px solid #1e2a3a; display: flex; flex-direction: column; padding: 8px 22px 12px; background: rgba(2,6,12,.8); }
+.room-chat { height: 130px; flex: none; border-top: 1px solid #1e2a3a; display: flex; flex-direction: column; padding: 8px 22px 12px; background: rgba(2,6,12,.8); }
 .rc-log { flex: 1; overflow: auto; font-size: 13px; line-height: 1.6; }
 .rc-log b { color: var(--gold); }
 .rc-log .sys { color: var(--teal); }
