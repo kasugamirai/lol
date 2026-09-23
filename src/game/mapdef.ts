@@ -72,7 +72,8 @@ function laneTowers(team: 0 | 1, lane: LaneId, pts: P2[], tiers: [number, number
   const tag = team === 0 ? 'b' : 'r'
   tiers.forEach((s, i) => {
     const [x, z] = at(s)
-    t.push({ id: `t${tag}-${lane}-${3 - i}`, team, lane, tier: (3 - i) as 1 | 2 | 3, x, z })
+    // tiers are listed outermost first: [outer, inner, inhibitor tower]
+    t.push({ id: `t${tag}-${lane}-${i + 1}`, team, lane, tier: (i + 1) as 1 | 2 | 3, x, z })
   })
   const [ix, iz] = at(inhibS)
   const inhib: StructDef = { id: `i${tag}-${lane}`, team, kind: 'inhib', lane, x: ix, z: iz }

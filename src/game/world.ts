@@ -379,19 +379,15 @@ export class World {
     if (s.kind === 'tower') {
       const tier = Number(s.type)
       const def = this.map.towers.find(t => t.id === s.id)!
-      if (tier === 1) return false
-      if (tier === 2 || tier === 3) {
-        const prev = this.towers.find(t => t.team === s.team && this.map.towers.find(d => d.id === t.id)!.lane === def.lane && Number(t.type) === tier - 1)
-        return !!prev && !prev.dead
+      if (tier <= 3) {
+        // protected while any outer tower of the same lane stands
+        return this.towers.some(t => t !== s && !t.dead && t.team === s.team && Number(t.type) < tier && this.map.towers.find(d => d.id === t.id)!.lane === def.lane)
       }
       // nexus towers: need at least one inhibitor down
       return !this.structs.some(i => i.kind === 'inhib' && i.team === s.team && i.dead)
     }
     if (s.kind === 'inhib') {
-      const t3 = this.towers.find(t => t.team === s.team && Number(t.type) === 3 && this.map.towers.find(d => d.id === t.id)!.lane === s.type)
-      if (t3) return !t3.dead
-      // aram: the inhib tower id is tier 3 as well
-      return false
+      return this.towers.some(t => !t.dead && t.team === s.team && Number(t.type) <= 3 && this.map.towers.find(d => d.id === t.id)!.lane === s.type)
     }
     if (s.kind === 'nexus') {
       return this.towers.some(t => t.team === s.team && Number(t.type) === 4 && !t.dead)
