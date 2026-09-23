@@ -27,6 +27,8 @@ export interface MMOffer {
   mode: MMMode
   players: { pk: string; name: string; team: 0 | 1 }[]
   t: number
+  /** formed by "start now": begin as soon as everyone arrives */
+  quick?: boolean
 }
 
 interface LobbyState {
@@ -151,17 +153,32 @@ export class Lobby {
     const n = humans.size
     if (n < 2) return
     if (n < cfg.maxHumans && oldest < MM_GATHER_MS) return
-    const picked = [...humans.values()].slice(0, cfg.maxHumans)
+    this.formMatch(mm.mode, [...humans.values()], false)
+  }
+
+  private formMatch(mode: MMMode, queued: LobbyState[], quick: boolean) {
+    const cfg = MM_MODES[mode]
+    const picked = queued.slice(0, cfg.maxHumans)
     // balance teams by rating (snake draft)
     const sorted = [...picked].sort((a, b) => (b.mm?.rating ?? 1000) - (a.mm?.rating ?? 1000))
     const pattern = [0, 1, 1, 0]
     const players = sorted.map((s, i) => ({ pk: s.pk, name: s.name, team: pattern[i % 4] as 0 | 1 }))
-    const offer: MMOffer = { room: randId(6), mode: mm.mode, players, t: Date.now() }
+    const offer: MMOffer = { room: randId(6), mode, players, t: Date.now(), quick }
     this.handledOffers.add(offer.room)
     this.state.offer = offer
     this.state.mm = null
     this.push()
     this.onMatched?.(offer, true)
+  }
+
+  /** stop waiting: form a match right now with everyone currently queued for this mode (bots fill the rest) */
+  startNow() {
+    const mm = this.state.mm
+    if (!mm) return
+    const humans = new Map<string, LobbyState>()
+    humans.set(this.state.pk, this.state)
+    for (const [, s] of this.queued(mm.mode)) if (!humans.has(s.pk)) humans.set(s.pk, s)
+    this.formMatch(mm.mode, [...humans.values()], true)
   }
 
   destroy() {

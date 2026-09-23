@@ -81,7 +81,7 @@ export class App {
     await room.whenSyncedOrTimeout()
     room.create({
       id, name: o.name, map: o.map, teamSize: o.teamSize, owner: this.id.pk, ownerName: this.id.name, botDiff: o.botDiff,
-      priv: !!o.priv, mm: !!o.mm, expected: o.mm?.players.map(p => p.pk),
+      priv: !!o.priv, mm: !!o.mm, quick: !!o.mm?.quick, expected: o.mm?.players.map(p => p.pk),
     })
     const auth = await roomProof(id)
     if (o.mm) {
@@ -98,6 +98,11 @@ export class App {
       room.claim('b0', { ...this.me, auth }, { champ: settings.lastChamp, spells: settings.spells })
     }
     if (o.fill) room.fillBots(o.botDiff)
+    // "start now" with nobody else queued: go straight into the game
+    if (o.mm?.quick && o.mm.players.length === 1) {
+      room.fillBots(o.botDiff)
+      o.autostart = true
+    }
     if (o.autostart) {
       room.start()
       this.startGame(room)
@@ -238,11 +243,16 @@ export class App {
     if (!this.mmBox) {
       this.mmBox = el('div', 'mm-box')
       document.body.appendChild(this.mmBox)
-      this.mmBox.addEventListener('click', e => { if ((e.target as HTMLElement).closest('[data-mm=cancel]')) this.cancelMatch() })
+      this.mmBox.addEventListener('click', e => {
+        const t = e.target as HTMLElement
+        if (t.closest('[data-mm=cancel]')) this.cancelMatch()
+        else if (t.closest('[data-mm=now]')) this.lobby.startNow()
+      })
     }
     const secs = (Date.now() - t.since) / 1000
     const n = this.lobby.queueCount(t.mode)
-    this.mmBox.innerHTML = `<div class="mm-spin"></div><div><b>正在匹配 · ${MM_MODES[t.mode].label}</b><div class="mm-sub">${fmtTime(secs)} · 队列中 ${n} 人 · 在线 ${this.lobby.online()} 人${n < 2 ? '<br>等待更多玩家加入…（也可以先进行人机练习）' : ''}</div></div><button class="btn" data-mm="cancel">取消</button>`
+    this.mmBox.innerHTML = `<div class="mm-spin"></div><div><b>正在匹配 · ${MM_MODES[t.mode].label}</b><div class="mm-sub">${fmtTime(secs)} · 队列中 ${n} 人 · 在线 ${this.lobby.online()} 人${n < 2 ? '<br>等待更多玩家加入… 或点击「立即开始」由电脑补位' : '<br>「立即开始」将与当前队列中的玩家开局'}</div></div>
+      <div class="mm-btns"><button class="btn-gold" data-mm="now">立即开始</button><button class="btn" data-mm="cancel">取消</button></div>`
   }
 }
 

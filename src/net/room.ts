@@ -25,6 +25,7 @@ export interface RoomMeta {
   botDiff: number
   priv?: boolean
   mm?: boolean
+  quick?: boolean
   expected?: string[]
 }
 

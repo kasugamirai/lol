@@ -188,7 +188,8 @@ export class RoomScreen {
       const humans = this.room.entries().filter(([, s]) => s.kind === 'human')
       const allHere = (info.expected ?? []).every(pk => online.has(pk))
       const allReady = humans.every(([, s]) => s.ready)
-      if ((allHere && allReady && humans.length > 0) || now >= this.countdownEnd) {
+      const quickGo = info.quick && (allHere || now - (info.createdAt || now) > 10000)
+      if ((allHere && allReady && humans.length > 0) || quickGo || now >= this.countdownEnd) {
         this.room.fillBots(info.botDiff)
         this.start()
       }
@@ -246,7 +247,7 @@ export class RoomScreen {
         <div class="room-title"><h2>${esc(info.name)}</h2><div class="room-meta">${MAPS[info.map]} · ${info.teamSize}v${info.teamSize} · 电脑难度 ${DIFF[info.botDiff]} · 房间号 <b>${esc(info.id)}</b> <button class="mini" data-act="copy">复制邀请链接</button></div></div>
         <div class="room-status">${this.room.yr.status === 'connected' ? '🟢 已连接' : '🟠 连接中'} · ${online.size} 人在线</div>
       </div>
-      ${info.mm ? `<div class="mm-banner">⚔️ 匹配成功！选择你的英雄并准备 — <b class="mm-cd">${cd}</b> 秒后自动开始</div>` : ''}
+      ${info.mm ? `<div class="mm-banner">⚔️ 匹配成功！${info.quick ? '所有玩家到齐后立即开始' : `选择你的英雄并准备 — <b class="mm-cd">${cd}</b> 秒后自动开始`}</div>` : ''}
       <div class="room-body">
         <div class="team-col t0"><h3>蓝色方</h3>${keys.filter(k => slotTeam(k) === 0).map(slotCard).join('')}</div>
         <div class="room-mid">
