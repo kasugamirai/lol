@@ -8,15 +8,21 @@ import { MINION_TYPES, MinionType } from './data/units'
 import { LaneId, MonsterType } from './mapdef'
 import { dist } from '../util/math'
 
-const SEND_MS = 66
+const SEND_MS = 50
+const WORLD_MS = 95
+const FULL_MS = 1000
+const EVENT_KEEP_MS = 700
 const FRESH_MS = 4000
 const LANES: LaneId[] = ['top', 'mid', 'bot']
+const r1 = (v: number) => Math.round(v * 10) / 10
 const r2 = (v: number) => Math.round(v * 100) / 100
 
+/** champion snapshot; fields after `rs` are only present in full snapshots (once per second) */
 export interface ChampSnap {
-  i: string; x: number; z: number; f: number; hp: number; mh: number; mp: number; mm: number; sh: number
-  lv: number; fl: number; at: string; as: number; tp: number; rs: number
-  k: number; d: number; a: number; cs: number; g: number; it: (string | null)[]; sk: number[]; xp: number; sp?: [string, string]
+  i: string; x: number; z: number; f: number; hp: number; mp: number; sh: number
+  fl: number; at: string; as: number; tp: number; rs: number
+  mh?: number; mm?: number; lv?: number
+  k?: number; d?: number; a?: number; cs?: number; g?: number; it?: (string | null)[]; sk?: number[]; xp?: number; sp?: [string, string]; dm?: number
 }
 
 interface WorldSnap {
@@ -68,6 +74,8 @@ export class NetGame {
   private handler: (ch: { added: number[]; updated: number[]; removed: number[] }) => void
   peers = 0
   bytesOut = 0
+  private lastFull = 0
+  private lastWorldSend = 0
 
   constructor(public room: MatchRoom, public w: World, public me: { pk: string; name: string }, public slot: string | null) {
     w.onEmit = ev => this.emit(ev)
@@ -112,7 +120,9 @@ export class NetGame {
 
   private send(nowMs: number) {
     const w = this.w
-    this.outbox = this.outbox.filter(o => nowMs - o.t < 1600)
+    this.outbox = this.outbox.filter(o => nowMs - o.t < EVENT_KEEP_MS)
+    const full = nowMs - this.lastFull >= FULL_MS
+    if (full) this.lastFull = nowMs
     const st: RemoteState = {
       pk: this.me.pk, name: this.me.name,
       slot: this.restored ? this.slot : null,
@@ -122,8 +132,11 @@ export class NetGame {
       t: Date.now(),
       ev: this.outbox.map(o => [o.s, o.e]),
     }
-    if (w.me && this.restored) st.c = this.champSnap(w.me)
-    if (w.isHost) st.w = this.worldSnap()
+    if (w.me && this.restored) st.c = this.champSnap(w.me, full)
+    if (w.isHost && (full || nowMs - this.lastWorldSend >= WORLD_MS)) {
+      st.w = this.worldSnap(full)
+      this.lastWorldSend = nowMs
+    }
     this.room.yr.awareness.setLocalState(st)
     this.lastSend = nowMs
     this.dirty = false
@@ -245,7 +258,7 @@ export class NetGame {
     this.restored = true
     const me = this.w.me
     if (!me) return
-    const fromHost = snap?.b.find(b => b.i === me.id)
+    const fromHost = snap?.b.find(b => b.i === me.id && b.lv !== undefined)
     if (fromHost) {
       me.restore({ lv: fromHost.lv, xp: fromHost.xp, g: fromHost.g, it: fromHost.it, sk: fromHost.sk, k: fromHost.k, d: fromHost.d, a: fromHost.a, cs: fromHost.cs })
       if (!(fromHost.fl & F.DEAD)) {
@@ -268,33 +281,44 @@ export class NetGame {
   }
 
   // ------------------------------------------------------------------ snapshots
-  champSnap(c: Champion): ChampSnap {
+  champSnap(c: Champion, full = true): ChampSnap {
     const w = this.w
-    return {
-      i: c.id, x: r2(c.x), z: r2(c.z), f: r2(c.facing), hp: Math.round(c.hp), mh: Math.round(c.maxHp), mp: Math.round(c.mp), mm: Math.round(c.maxMp),
-      sh: Math.round(c.shieldTotal()), lv: c.level, fl: c.fl, at: c.targetId ?? '', as: c.atkSeq, tp: c.tp,
+    const s: ChampSnap = {
+      i: c.id, x: r1(c.x), z: r1(c.z), f: r1(c.facing), hp: Math.round(c.hp), mp: Math.round(c.mp),
+      sh: Math.round(c.shieldTotal()), fl: c.fl, at: c.targetId ?? '', as: c.atkSeq, tp: c.tp,
       rs: c.dead ? Math.round((c.respawnAt - w.now) * 10) / 10 : 0,
-      k: c.kills, d: c.deaths, a: c.assists, cs: c.cs, g: Math.round(c.gold), it: c.items, sk: c.skillLv, xp: Math.round(c.xp), sp: c.spells,
     }
+    if (full) {
+      Object.assign(s, {
+        mh: Math.round(c.maxHp), mm: Math.round(c.maxMp), lv: c.level,
+        k: c.kills, d: c.deaths, a: c.assists, cs: c.cs, g: Math.round(c.gold), it: c.items, sk: c.skillLv, xp: Math.round(c.xp),
+        sp: c.spells, dm: Math.round(c.dmgToChamps),
+      })
+    }
+    return s
   }
 
-  private worldSnap(): WorldSnap {
+  private worldSnap(full: boolean): WorldSnap {
     const w = this.w
     const h = w.host
     const m: any[][] = [], j: any[][] = [], wd: any[][] = [], s: any[][] = []
     for (const u of w.units.values()) {
       if (u instanceof Minion) {
-        m.push([u.id, MINION_TYPES.indexOf(u.mt), u.team, LANES.indexOf(u.lane), r2(u.x), r2(u.z), r2(u.facing), Math.round(u.hp), u.maxHp, u.fl, u.targetId ?? '', u.atkSeq])
+        m.push(full
+          ? [u.id, MINION_TYPES.indexOf(u.mt), u.team, LANES.indexOf(u.lane), r1(u.x), r1(u.z), r1(u.facing), Math.round(u.hp), u.maxHp, u.fl, u.targetId ?? '', u.atkSeq]
+          : [u.id, r1(u.x), r1(u.z), r1(u.facing), Math.round(u.hp), u.fl, u.targetId ?? '', u.atkSeq])
       } else if (u instanceof Monster) {
-        j.push([u.id, u.mt, u.camp, r2(u.x), r2(u.z), r2(u.facing), Math.round(u.hp), u.maxHp, u.fl, u.targetId ?? '', u.atkSeq])
+        j.push(full
+          ? [u.id, u.mt, u.camp, r1(u.x), r1(u.z), r1(u.facing), Math.round(u.hp), u.maxHp, u.fl, u.targetId ?? '', u.atkSeq]
+          : [u.id, r1(u.x), r1(u.z), r1(u.facing), Math.round(u.hp), u.fl, u.targetId ?? '', u.atkSeq])
       } else if (u instanceof Ward) {
-        wd.push([u.id, u.team, r2(u.x), r2(u.z), u.hp, Math.round(u.expires - w.now), u.fl])
+        wd.push([u.id, u.team, r1(u.x), r1(u.z), u.hp, Math.round(u.expires - w.now), u.fl])
       } else if (u.isStructure) {
-        s.push([u.id, Math.round(u.hp), u.dead ? 1 : 0, u.targetId ?? '', u.atkSeq])
+        if (full || u.targetId || u.hp < u.maxHp) s.push([u.id, Math.round(u.hp), u.dead ? 1 : 0, u.targetId ?? '', u.atkSeq])
       }
     }
     const b: ChampSnap[] = []
-    for (const c of w.champs) if (c.local && c !== w.me) b.push(this.champSnap(c))
+    for (const c of w.champs) if (c.local && c !== w.me) b.push(this.champSnap(c, full))
     return {
       t: Math.round(w.time * 100) / 100, n: h.nextId, wv: h.wave, nw: h.nextWaveAt,
       ca: [...h.campAt.entries()].filter(([, v]) => v >= 0),
@@ -331,9 +355,18 @@ export class NetGame {
       u.targetId = tgt || null
     }
     for (const e of s.m) {
-      const [id, mti, team, li, x, z, f, hp, mhp, fl, tgt, as] = e
+      const lite = e.length === 8
+      const id = e[0]
       seen.add(id)
       let u = w.unit(id) as Minion | null
+      if (lite) {
+        if (!u) continue
+        const [, x, z, f, hp, fl, tgt, as] = e
+        u.interp.push(now, x, z, f)
+        dyn(u, fl, tgt, as, hp, u.maxHp)
+        continue
+      }
+      const [, mti, team, li, x, z, f, hp, mhp, fl, tgt, as] = e
       if (!u) {
         const lane = LANES[li]
         u = new Minion(id, MINION_TYPES[mti] as MinionType, team, lane, w.map.lanes[lane] ?? w.map.lanes.mid!, x, z, 0)
@@ -347,9 +380,17 @@ export class NetGame {
       dyn(u, fl, tgt, as, hp, mhp)
     }
     for (const e of s.j) {
-      const [id, mt, camp, x, z, f, hp, mhp, fl, tgt, as] = e
+      const id = e[0]
       seen.add(id)
       let u = w.unit(id) as Monster | null
+      if (e.length === 8) {
+        if (!u) continue
+        const [, x, z, f, hp, fl, tgt, as] = e
+        u.interp.push(now, x, z, f)
+        dyn(u, fl, tgt, as, hp, u.maxHp)
+        continue
+      }
+      const [, mt, camp, x, z, f, hp, mhp, fl, tgt, as] = e
       if (!u) {
         const cd = w.map.camps.find(c => c.id === camp)
         let hx = x, hz = z
@@ -412,30 +453,34 @@ export class NetGame {
       const c = w.unit(b.i)
       if (c instanceof Champion && !c.local) this.applyChamp(c, b, now)
     }
-    if (!this.restored) this.finishRestore(s)
+    if (!this.restored && s.m.every(e => e.length !== 8)) this.finishRestore(s)
   }
 
   private applyChamp(c: Champion, s: ChampSnap, now: number) {
     const w = this.w
     c.interp.push(now, s.x, s.z, s.f, s.tp)
-    const itemsChanged = c.items.join() !== s.it.join()
-    const lvChanged = c.level !== s.lv
-    c.level = s.lv
-    c.items = s.it.slice()
-    c.skillLv = s.sk.slice()
-    if (s.sp) c.spells = s.sp
-    if (itemsChanged || lvChanged) c.recalc()
+    if (s.lv !== undefined) {
+      const itemsChanged = !!s.it && c.items.join() !== s.it.join()
+      const lvChanged = c.level !== s.lv
+      c.level = s.lv
+      if (s.it) c.items = s.it.slice()
+      if (s.sk) c.skillLv = s.sk.slice()
+      if (s.sp) c.spells = s.sp
+      if (itemsChanged || lvChanged) c.recalc()
+      if (s.mh !== undefined) c.stats.maxHp = s.mh
+      if (s.mm !== undefined) c.stats.maxMp = s.mm
+      c.kills = s.k ?? c.kills; c.deaths = s.d ?? c.deaths; c.assists = s.a ?? c.assists; c.cs = s.cs ?? c.cs
+      c.gold = s.g ?? c.gold; c.xp = s.xp ?? c.xp
+      if (s.dm !== undefined) c.dmgToChamps = s.dm
+    }
     c.hp = s.hp
-    c.stats.maxHp = s.mh
     c.mp = s.mp
-    c.stats.maxMp = s.mm
     c.shieldR = s.sh
     const wasDead = c.dead
     c.fl = s.fl
     c.dead = !!(s.fl & F.DEAD)
     if (c.dead && !wasDead) c.deadAt = w.now
     c.respawnRemain = s.rs
-    c.kills = s.k; c.deaths = s.d; c.assists = s.a; c.cs = s.cs; c.gold = s.g; c.xp = s.xp
     if (s.as !== c.atkSeq) {
       if (c.seenAtkSeq > 0) this.remoteAttack(c, s.at)
       c.atkSeq = s.as

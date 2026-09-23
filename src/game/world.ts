@@ -96,7 +96,7 @@ export interface WorldHooks {
   gameOver?(winner: Team): void
 }
 
-export const INTERP_DELAY = 110
+export const INTERP_DELAY = 130
 
 export class World {
   map: MapDef

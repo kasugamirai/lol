@@ -487,13 +487,17 @@ export class Hud {
     tabs.forEach(b => b.classList.toggle('on', b.dataset.tab === this.shopTab))
     const tab = SHOP_TABS.find(t => t.id === this.shopTab)!
     const list = this.shopTab === 'rec' ? [...me.def.build.map(id => ITEM_MAP[id]), ITEM_MAP.potion] : ITEMS.filter(tab.f)
-    this.q('.shop-grid').innerHTML = list.map(it => `
+    this.q('.shop-grid').innerHTML = list.map(it => {
+      const cost = me.itemCost(it.id).cost
+      return `
       <div class="shop-item ${me.hasItem(it.id) && !it.consumable ? 'owned' : ''} ${this.shopSel === it.id ? 'sel' : ''}" data-act="sel" data-id="${it.id}">
-        <div class="si-icon">${it.icon}</div><div class="si-name">${esc(it.name)}</div><div class="si-price" data-price="${it.price}">${it.price}</div>
-      </div>`).join('')
+        <div class="si-icon">${it.icon}</div><div class="si-name">${esc(it.name)}</div>
+        <div class="si-price" data-price="${cost}">${cost < it.price ? `<s>${it.price}</s> ` : ''}${cost}</div>
+      </div>`
+    }).join('')
     const sel = this.shopSel ? ITEM_MAP[this.shopSel] : null
     const inv = me.items.map((id, i) => id ? `<div class="inv-it"><span>${ITEM_MAP[id].icon} ${esc(ITEM_MAP[id].name)}</span><button data-act="sell" data-slot="${i}">出售 ${Math.floor(ITEM_MAP[id].price * SELL_RATIO)}</button></div>` : '').join('')
-    this.q('.shop-detail').innerHTML = (sel ? `${itemTip(sel, me)}<button class="buy-btn" data-act="buy" data-id="${sel.id}">购买 · ${sel.price} 金币</button>` : '<div class="tt-d">选择一件装备查看详情<br>右键或双击装备可直接购买</div>') +
+    this.q('.shop-detail').innerHTML = (sel ? `${itemTip(sel, me)}<button class="buy-btn" data-act="buy" data-id="${sel.id}">购买 · ${me.itemCost(sel.id).cost} 金币</button>` : '<div class="tt-d">选择一件装备查看详情<br>右键或双击装备可直接购买</div>') +
       `<div class="inv-list"><div class="tt-m">我的装备（右键装备栏可出售）</div>${inv || '<div class="tt-d">暂无</div>'}</div>`
     this.markAffordable(me)
   }
@@ -533,6 +537,7 @@ export function itemTip(it: ItemDef, me?: Champion) {
     <div class="tt-s">${esc(statLine(it.stats))}</div>
     ${it.passive ? `<div class="tt-d">被动：${esc(it.passive)}</div>` : ''}
     ${it.active ? `<div class="tt-d">主动 - ${esc(it.active.name)}：${esc(it.active.desc)}（冷却 ${it.active.cd}秒）</div>` : ''}
+    ${it.from ? `<div class="tt-m">合成：${it.from.map(f => `${ITEM_MAP[f].icon}${esc(ITEM_MAP[f].name)}${me && me.items.includes(f) ? '✓' : ''}`).join(' + ')}${me ? ` · 还需 ${me.itemCost(it.id).cost} 金币` : ''}</div>` : ''}
     ${it.consumable ? '<div class="tt-m">消耗品，使用后消失</div>' : ''}
     ${me && me.hasItem(it.id) && !it.consumable ? '<div class="tt-m">已拥有</div>' : ''}`
 }

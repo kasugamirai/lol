@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lol",
+  "compatibility_date": "2026-09-21",
+  "observability": { "enabled": true },
+  // Pure static site: serve the Vite build output. No Worker script / Vite plugin needed.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
