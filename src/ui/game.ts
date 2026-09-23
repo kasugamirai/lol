@@ -607,6 +607,8 @@ export class GameScreen implements TouchHost {
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('pagehide', onHide)
     window.addEventListener('pageshow', onShow)
+    // the match started while the phone was in another app: step out right away (?forceRender keeps it for debugging)
+    if (document.hidden && !FORCE_RENDER) onHide()
     this.unsub.push(() => {
       document.removeEventListener('visibilitychange', onVis)
       window.removeEventListener('pagehide', onHide)

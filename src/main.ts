@@ -230,7 +230,7 @@ export class App {
       setTimeout(() => r.destroy(), 300)
       this.lobby.advertise(null)
     }
-    if (new URLSearchParams(location.search).get('room')) history.replaceState(null, '', location.pathname + (location.search.includes('id=') ? '?id=' + new URLSearchParams(location.search).get('id') : ''))
+    if (new URLSearchParams(location.search).get('room')) history.replaceState(history.state, '', location.pathname + (location.search.includes('id=') ? '?id=' + new URLSearchParams(location.search).get('id') : ''))
     if (toMenu) this.showMenu()
   }
 
@@ -349,7 +349,7 @@ function bindGlobal(app: App) {
     if (!app.room && q.has('room')) {
       q.delete('room')
       const qs = q.toString()
-      history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''))
+      history.replaceState(history.state, '', location.pathname + (qs ? '?' + qs : ''))
     }
     if (app.handleBack()) app.armBack()
   })

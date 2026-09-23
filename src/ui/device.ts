@@ -79,9 +79,9 @@ export function requestFullscreen() {
 /** touch HUD scale factor relative to an 844x390 landscape phone */
 export function uiScale() {
   const base = Math.min(1.3, Math.max(0.8, Math.min(innerHeight / 390, innerWidth / 844)))
-  // the right cluster is 351·s tall (anchor 62 + cancel zone top 289): never let the user's multiplier push it off screen
+  // the right cluster is 361·s tall (anchor 62 + cancel zone top 299): never let the user's multiplier push it off screen
   const ins = safeInsets()
-  const fit = (innerHeight - ins.b - ins.t - 8) / 351
+  const fit = (innerHeight - ins.b - ins.t - 8) / 361
   return Math.max(0.7, Math.min(1.3, fit, base * (settings.uiScale || 1)))
 }
 

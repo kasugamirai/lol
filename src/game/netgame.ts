@@ -148,7 +148,8 @@ export class NetGame {
 
   /** no other human in the match, nobody else connected, and our world is the settled authoritative one */
   private isSolo() {
-    const others = this.room.entries().some(([k, s]) => s.kind === 'human' && k !== this.slot)
+    // humans who left (AFK-botted by us) do not count
+    const others = this.room.entries().some(([k, s]) => s.kind === 'human' && k !== this.slot && !this.w.host.afk.has(k))
     return !others && this.peers === 0 && this.restored && this.w.isHost
   }
 

@@ -90,7 +90,7 @@ export const TC_LAYOUT: TcLayout = {
   minion: [-70, 40, 38],
   tower: [46, -72, 38],
   recall: [-205, 38, 40],
-  cancel: [-230, -255, 68], // clear of every aim disc: |cancel − skill| ≥ AIM_MAX + CANCEL_R_HIT
+  cancel: [-280, -265, 68], // clear of every aim drag, even from a button's edge: |cancel − skill| ≥ AIM_MAX + CANCEL_R_HIT + r + 15
   ITEMS: { dx: -249, dy: 38, step: -42, size: 38, max: 6, maxNarrow: 3, gap: 4 },
   LVLUP: { out: 44, size: 28, slop: 6, ang: { Q: 180, W: 210, E: 240, R: 270 } },
   ANCHOR: { right: 66, bottom: 62 },

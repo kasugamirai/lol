@@ -38,13 +38,14 @@ type Gesture =
 interface JoyState { id: number; bx: number; by: number; ox: number; oy: number; active: boolean; ux: number; uz: number; lastIssue: number; lastAng: number; moved: boolean; stopped: boolean }
 interface AimState { id: number; key: CastKey; def: SkillDef; ox: number; oy: number; dx: number; dy: number; overCancel: boolean }
 /** lastId = the unit this gesture last ordered an attack on (its chase is ours to leash / stop) */
-interface AtkState { mode: TL.AtkMode; held: boolean; target: Unit | null; nextEval: number; pulseUntil: number; t0: number; lastIssue: number; lastId: string | null; tapped: Unit | null; btn: HTMLElement | null }
+interface AtkState { mode: TL.AtkMode; held: boolean; target: Unit | null; nextEval: number; pulseUntil: number; t0: number; lastIssue: number; lastId: string | null; btn: HTMLElement | null }
 
 /** elements that keep native behaviour (scrolling, focus, clicks) */
 const NATIVE = 'input, select, textarea, .shop, .scoreboard, .gmenu, .result-ov, .chat.open'
 const INERT_CAST: CastResult[] = ['unlearned', 'mana', 'nocharge', 'none', 'dead', 'cc']
-/** a button press held this long gets no native click (Chrome long-press); the router clicks it */
-const UI_LONG_MS = 450
+/** a button press held this long may get no native click (Android long-press is 400 ms since Android 12);
+ *  the router clicks it — a native click that still arrives is dropped by the dedupe */
+const UI_LONG_MS = 300
 
 /**
  * Wild Rift style touch controls: left virtual joystick, right attack button + skill buttons with
@@ -413,7 +414,9 @@ export class TouchControls {
   // ------------------------------------------------------------------ attack
   private startAtk(mode: TL.AtkMode, btn: HTMLElement, now: number) {
     btn.classList.add('press')
-    this.atk = { mode, held: true, target: null, nextEval: 0, pulseUntil: 0, t0: now, lastIssue: -1e9, lastId: null, tapped: null, btn }
+    // a chase started by an earlier ⚔ gesture stays ours to leash
+    const prev = this.atk
+    this.atk = { mode, held: true, target: null, nextEval: 0, pulseUntil: 0, t0: now, lastIssue: -1e9, lastId: prev?.lastId ?? null, btn }
     this.updateAtk(now)
     if (!this.atk?.target) this.rangeFlashUntil = now + 400
   }
@@ -426,8 +429,6 @@ export class TouchControls {
     // cancelled (pointercancel, panel opened, app hidden…): stop the chase this gesture started
     if (cancelled) { this.stopChase(a); this.atk = null; return }
     if (now - a.t0 < 200) a.pulseUntil = now + TL.TAP_PULSE_MS
-    // leash what the champion is actually chasing, even if the pick already dropped a fleeing target
-    a.tapped = a.target ?? this.chased(a)
   }
 
   /** the unit this attack gesture's order is still chasing, if any */
@@ -436,8 +437,11 @@ export class TouchControls {
     return a.lastId && o && o.t === 'attack' && !o.auto && o.id === a.lastId ? this.w.unit(o.id) ?? null : null
   }
 
+  /** stop a chase this gesture started — but never interrupt a fight that is already in range */
   private stopChase(a: AtkState) {
-    if (this.chased(a)) this.w.me!.cmdStop()
+    const c = this.chased(a)
+    const me = this.w.me
+    if (c && me && !me.inAtkRange(c)) me.cmdStop()
   }
 
   private leashed(me: Champion, t: Unit, mode: TL.AtkMode) {
@@ -467,26 +471,26 @@ export class TouchControls {
       if (c && this.leashed(me, c, a.mode)) me.cmdStop()
       return
     }
-    // a skill is walking into range: let it finish (the joystick yields to it too)
-    if (me.order?.t === 'cast') return
+    // a skill cast after this press is walking into range: let it finish (a ⚔ press after the cast overrides it)
+    if (me.order?.t === 'cast' && this.castOrderAt >= a.t0) return
     if (this.joy?.active) {
       // orb-walk: only commit to an attack when it can fire right now
       if (me.inAtkRange(t, 0.1) && me.atkCd <= 0.05 && me.windup <= 0 && !me.casting && this.canSwing()) { me.cmdAttack(t); a.lastIssue = now; a.lastId = t.id }
     } else {
       const o = me.order
-      if (!(o && o.t === 'attack' && o.id === t.id && !o.auto)) { me.cmdAttack(t); a.lastIssue = now; a.lastId = t.id }
+      if (!(o && o.t === 'attack' && o.id === t.id && !o.auto)) { me.cmdAttack(t); a.lastIssue = now }
+      a.lastId = t.id // issued or adopted: this gesture now owns (and leashes) the chase
     }
   }
 
+  /** released ⚔: keep the chase we own on a leash until it ends */
   private leash(now: number) {
     const a = this.atk
     const me = this.w.me
     if (!a || !me) return
-    if (this.joy?.active || !a.tapped) { if (now >= a.pulseUntil) this.atk = null; return }
-    const o = me.order
-    if (o && o.t === 'attack' && o.id === a.tapped.id) {
-      if (this.leashed(me, a.tapped, a.mode)) { me.cmdStop(); this.atk = null }
-    } else this.atk = null
+    const c = this.joy?.active ? null : this.chased(a)
+    if (!c) { if (now >= a.pulseUntil) this.atk = null; return }
+    if (this.leashed(me, c, a.mode)) { me.cmdStop(); this.atk = null }
   }
 
   private atkProtect(now: number) {

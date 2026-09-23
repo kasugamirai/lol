@@ -542,11 +542,11 @@ section('TC_LAYOUT')
     .every(([k, x, y]) => { const p = tcLvlupPos(k as 'Q'); return near(p[0], x as number, 0.1) && near(p[1], y as number, 0.1) }))
   check('item row at s=1 matches ITEMS.step', near(tcItemPos(1, 1)[0] - tcItemPos(0, 1)[0], L.ITEMS.step))
   {
-    // a full-length aim drag started on any skill centre must not end inside the cancel zone
+    // a full-length aim drag started anywhere on a skill button (plus a 15px overshoot) must not reach the cancel zone
     const c = L.cancel
     let worst = Infinity, who = ''
     for (const k of ['Q', 'W', 'E', 'R', 'D', 'F', 'ward'] as const) {
-      const m = Math.hypot(L[k][0] - c[0], L[k][1] - c[1]) - (TL_AIM_MAX + TL_CANCEL_R_HIT)
+      const m = Math.hypot(L[k][0] - c[0], L[k][1] - c[1]) - (TL_AIM_MAX + TL_CANCEL_R_HIT + L[k][2] / 2 + 15)
       if (m < worst) { worst = m; who = k }
     }
     check('cancel zone is outside every full-length aim drag', worst >= 0, `${who} margin ${worst.toFixed(1)}px`)
