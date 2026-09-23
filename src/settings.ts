@@ -13,12 +13,15 @@ export interface Settings {
   practiceSize: number
   botDiff: number
   camLock: boolean
+  /** touch UI: auto-detect, force on, force off */
+  mobileMode: 'auto' | 'on' | 'off'
 }
 
 const KEY = 'nexusrift.settings' + PROFILE_SUFFIX
 const defaults: Settings = {
   castMode: 'quick', shadows: true, quality: 1, volume: 0.5, edgePan: true, showFps: false,
   lastChamp: 'blaze', spells: ['flash', 'heal'], practiceMap: 'rift', practiceSize: 5, botDiff: 1, camLock: true,
+  mobileMode: 'auto',
 }
 
 function load(): Settings {
